@@ -2,7 +2,8 @@
 // Shows a tab strip under the ribbon of every Word, Excel and PowerPoint window
 // (one tab per open document), plus a "Tabs" ribbon tab. Uses only the documented
 // Office object model: Custom Task Panes docked at the top, Application.Windows and
-// Window.Activate. No window reparenting, no hooks. Settings are shared with the
+// Window.Activate. No window reparenting; the only hooks are a keyboard hook on Office's own
+// thread (Ctrl+Tab) and a watch on each window's close button. Settings are shared with the
 // OfficeTabsLite Center app through HKCU\Software\OfficeTabsLite.
 //
 // Build (interop types are embedded with /link, so no PIA is needed at runtime):
@@ -28,7 +29,7 @@ using Microsoft.Win32;
 
 [assembly: AssemblyTitle("OfficeTabsLite")]
 [assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("2.7.0.0")]
+[assembly: AssemblyFileVersion("2.8.0.0")]
 [assembly: ComVisible(false)]
 
 namespace OfficeTabsLite
@@ -68,6 +69,21 @@ namespace OfficeTabsLite
         public static extern int GetClassName(IntPtr hwnd, System.Text.StringBuilder name, int max);
         public delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
         [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc proc, IntPtr lParam);
+        [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam);
+        [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")] public static extern short GetKeyState(int vk);
+        [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
+
+        public const int WM_CLOSE = 0x0010, WM_SYSCOMMAND = 0x0112, SC_CLOSE = 0xF060;
+        public const int VK_TAB = 0x09, VK_SHIFT = 0x10, VK_CONTROL = 0x11, VK_MENU = 0x12;
+
+        // Keyboard hook on Office's UI thread (keyboard shortcuts for the tabs).
+        public const int WH_KEYBOARD = 2;
+        public delegate IntPtr HookProc(int code, IntPtr wParam, IntPtr lParam);
+        [DllImport("user32.dll")] public static extern IntPtr SetWindowsHookEx(int id, HookProc proc, IntPtr module, uint threadId);
+        [DllImport("user32.dll")] public static extern bool UnhookWindowsHookEx(IntPtr hook);
+        [DllImport("user32.dll")] public static extern IntPtr CallNextHookEx(IntPtr hook, int code, IntPtr wParam, IntPtr lParam);
+        [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
 
         // Turns off the window open/maximize/restore animation for one window.
         public const int DWMWA_TRANSITIONS_FORCEDISABLED = 3;
@@ -172,7 +188,58 @@ namespace OfficeTabsLite
 
     // ---- Settings shared by the add-in and the Center app (HKCU\Software\OfficeTabsLite) ----
 
+    // Saved file lists per app (HKCU\Software\OfficeTabsLite\Files): "Session.Word" holds the
+    // files open last time, "Closed.Word" the files closed most recently (newest first).
+    internal static class FileLists
+    {
+        private const string KeyPath = TabsSettings.KeyPath + @"\Files";
+        public const int MaxClosed = 10;
+
+        public static List<string> Get(string name)
+        {
+            try
+            {
+                using (RegistryKey k = Registry.CurrentUser.OpenSubKey(KeyPath))
+                {
+                    string[] v = k == null ? null : k.GetValue(name) as string[];
+                    if (v != null) return new List<string>(v);
+                }
+            }
+            catch { }
+            return new List<string>();
+        }
+
+        public static void Set(string name, List<string> files)
+        {
+            try
+            {
+                using (RegistryKey k = Registry.CurrentUser.CreateSubKey(KeyPath))
+                    k.SetValue(name, files.ToArray(), RegistryValueKind.MultiString);
+            }
+            catch { }
+        }
+
+        public static void PushClosed(string app, string path)
+        {
+            List<string> list = Get("Closed." + app);
+            list.RemoveAll(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase));
+            list.Insert(0, path);
+            if (list.Count > MaxClosed) list.RemoveRange(MaxClosed, list.Count - MaxClosed);
+            Set("Closed." + app, list);
+        }
+
+        public static void RemoveClosed(string app, string path)
+        {
+            List<string> list = Get("Closed." + app);
+            if (list.RemoveAll(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase)) > 0)
+                Set("Closed." + app, list);
+        }
+    }
+
     public enum TabStyle { Rounded, Trapezoid, Flat }
+
+    // What the window's own close button (X, Alt+F4) does while several files are open.
+    public enum CloseAction { Ask, CloseFile, CloseAll }
 
     public class TabsSettings
     {
@@ -185,6 +252,10 @@ namespace OfficeTabsLite
         public bool ShowIcons = true;         // file-type icon on each tab
         public bool NewOnDoubleClick = true;  // double-click empty strip space opens a new file
         public bool HideSingleTab = false;    // hide the strip while only one file is open
+        public CloseAction WindowClose = CloseAction.Ask;
+        public bool RestoreSession = false;   // reopen last time's files when the app starts
+        public bool CtrlTab = true;           // Ctrl+Tab / Ctrl+Shift+Tab switch tabs
+        public bool WheelSwitch = true;       // mouse wheel over the strip switches tabs
 
         public static TabsSettings Load()
         {
@@ -200,6 +271,11 @@ namespace OfficeTabsLite
                     s.ShowIcons = Convert.ToInt32(k.GetValue("ShowIcons", 1)) != 0;
                     s.NewOnDoubleClick = Convert.ToInt32(k.GetValue("NewOnDoubleClick", 1)) != 0;
                     s.HideSingleTab = Convert.ToInt32(k.GetValue("HideSingleTab", 0)) != 0;
+                    CloseAction close;
+                    if (Enum.TryParse(Convert.ToString(k.GetValue("WindowClose", "Ask")), true, out close)) s.WindowClose = close;
+                    s.RestoreSession = Convert.ToInt32(k.GetValue("RestoreSession", 0)) != 0;
+                    s.CtrlTab = Convert.ToInt32(k.GetValue("CtrlTab", 1)) != 0;
+                    s.WheelSwitch = Convert.ToInt32(k.GetValue("WheelSwitch", 1)) != 0;
                 }
             }
             catch { }
@@ -215,6 +291,10 @@ namespace OfficeTabsLite
                 k.SetValue("ShowIcons", ShowIcons ? 1 : 0, RegistryValueKind.DWord);
                 k.SetValue("NewOnDoubleClick", NewOnDoubleClick ? 1 : 0, RegistryValueKind.DWord);
                 k.SetValue("HideSingleTab", HideSingleTab ? 1 : 0, RegistryValueKind.DWord);
+                k.SetValue("WindowClose", WindowClose.ToString());
+                k.SetValue("RestoreSession", RestoreSession ? 1 : 0, RegistryValueKind.DWord);
+                k.SetValue("CtrlTab", CtrlTab ? 1 : 0, RegistryValueKind.DWord);
+                k.SetValue("WheelSwitch", WheelSwitch ? 1 : 0, RegistryValueKind.DWord);
             }
         }
 
@@ -222,7 +302,8 @@ namespace OfficeTabsLite
         {
             return o != null && o.Style == Style && o.GroupTaskbar == GroupTaskbar &&
                    o.ShowIcons == ShowIcons && o.NewOnDoubleClick == NewOnDoubleClick &&
-                   o.HideSingleTab == HideSingleTab;
+                   o.HideSingleTab == HideSingleTab && o.WindowClose == WindowClose &&
+                   o.RestoreSession == RestoreSession && o.CtrlTab == CtrlTab && o.WheelSwitch == WheelSwitch;
         }
 
         // Whether Office loads the add-in at startup for this app; null if it isn't installed for it.
@@ -309,9 +390,24 @@ namespace OfficeTabsLite
         private List<string> _labels = new List<string>();
         private TabsSettings _settings = new TabsSettings();
         private string _defaultExt = ".docx";   // extension for unsaved files of this app
+        private string _appName = "Word";
         private Color _accent = TabStrip.WordAccent;
 
+        // close button (X) of each document window, see OnWindowClose
+        private readonly Dictionary<IntPtr, CloseWatcher> _watchers = new Dictionary<IntPtr, CloseWatcher>();
+        private readonly HashSet<IntPtr> _closeAllowed = new HashSet<IntPtr>();
+        private bool _closingTabs;    // our own FileClose is running: not the user's X
+        private KeyHook _keyHook;
+
+        // recently closed files and the session (files open now, written to the registry)
+        private readonly Dictionary<string, string> _lastPath = new Dictionary<string, string>();
+        private List<string> _session;      // last list written
+        private int _sessionShrinkTicks;    // a shorter list waits a moment: quitting closes files one by one
+        private bool _sessionReady;         // false until last time's files have been reopened
+        private bool _sessionFrozen;        // closing everything: keep the list as it was
+
         internal string DefaultExt { get { return _defaultExt; } }
+        internal bool WheelSwitch { get { return _settings.WheelSwitch; } }
 
         // ---------- IDTExtensibility2 ----------
         public void OnConnection(object Application, ext_ConnectMode ConnectMode, object AddInInst, ref Array custom)
@@ -322,15 +418,18 @@ namespace OfficeTabsLite
 
             string name = "";
             try { name = (string)((dynamic)Application).Name; } catch { }
-            if (name.IndexOf("Excel", StringComparison.OrdinalIgnoreCase) >= 0) _defaultExt = ".xlsx";
-            else if (name.IndexOf("PowerPoint", StringComparison.OrdinalIgnoreCase) >= 0) _defaultExt = ".pptx";
+            if (name.IndexOf("Excel", StringComparison.OrdinalIgnoreCase) >= 0) { _defaultExt = ".xlsx"; _appName = "Excel"; }
+            else if (name.IndexOf("PowerPoint", StringComparison.OrdinalIgnoreCase) >= 0) { _defaultExt = ".pptx"; _appName = "PowerPoint"; }
             _accent = TabStrip.AccentFor(_defaultExt);
             _settings = TabsSettings.Load();
+            // Loaded later (not at startup): there is no session to restore first.
+            if (ConnectMode != ext_ConnectMode.ext_cm_Startup) _sessionReady = true;
         }
 
         public void OnDisconnection(ext_DisconnectMode RemoveMode, ref Array custom)
         {
             StopTimer();
+            StopWatching();
             RemoveAllPanes();
             RestoreTaskbar();
             _factory = null;
@@ -341,8 +440,13 @@ namespace OfficeTabsLite
         }
 
         public void OnAddInsUpdate(ref Array custom) { }
-        public void OnStartupComplete(ref Array custom) { }
-        public void OnBeginShutdown(ref Array custom) { StopTimer(); }
+        public void OnStartupComplete(ref Array custom)
+        {
+            // Give Office a moment to open the file it was started with (if any) first.
+            Later(1500, RestoreSession);
+        }
+
+        public void OnBeginShutdown(ref Array custom) { StopTimer(); StopWatching(); }
 
         // ---------- ICustomTaskPaneConsumer ----------
         public void CTPFactoryAvailable(ICTPFactory CTPFactoryInst)
@@ -355,6 +459,23 @@ namespace OfficeTabsLite
                 _timer.Tick += delegate { try { Sync(); } catch { } };
                 _timer.Start();
             }
+            if (_keyHook == null) _keyHook = KeyHook.Install(this);
+        }
+
+        private void StopWatching()
+        {
+            if (_keyHook != null) { _keyHook.Dispose(); _keyHook = null; }
+            foreach (CloseWatcher w in _watchers.Values) w.Release();
+            _watchers.Clear();
+        }
+
+        // Runs an action once, after the current Office call has returned.
+        private static void Later(int ms, MethodInvoker action)
+        {
+            var t = new Timer();
+            t.Interval = Math.Max(1, ms);
+            t.Tick += delegate { t.Stop(); t.Dispose(); try { action(); } catch { } };
+            t.Start();
         }
 
         // ---------- IRibbonExtensibility ----------
@@ -471,12 +592,14 @@ namespace OfficeTabsLite
             object w = FindWindow(key);
             if (w == null) return;
             // Close through Office's own command so it asks about unsaved changes as usual.
+            _closingTabs = true;
             try
             {
                 ((dynamic)w).Activate();
                 ((dynamic)_app).CommandBars.ExecuteMso("FileClose");
             }
             catch { }
+            finally { _closingTabs = false; }
             Sync();
         }
 
@@ -523,7 +646,9 @@ namespace OfficeTabsLite
                 t.Path = PathOf(doc);
                 t.Modified = IsModified(doc);
                 t.Color = TabColorStore.Get(key, t.Path);
+                if (t.Path != null) _lastPath[key] = t.Path;
                 items.Add(t);
+                WatchClose(key);
             }
 
             // Keep tabs in a stable order (Excel lists windows most-recently-active first,
@@ -536,13 +661,16 @@ namespace OfficeTabsLite
                 if (wins.ContainsKey(k)) { _missing.Remove(k); continue; }
                 int gone;
                 _missing.TryGetValue(k, out gone);
-                if (++gone > 5) { _order.Remove(k); _missing.Remove(k); TabColorStore.Forget(k); }
+                if (++gone > 5) { _order.Remove(k); _missing.Remove(k); TabColorStore.Forget(k); NoteClosed(k, items); }
                 else _missing[k] = gone;
             }
             List<TabItem> fresh = items.FindAll(t => !_order.Contains(t.Key));
             fresh.Sort((a, b) => string.Compare(a.Caption, b.Caption, StringComparison.CurrentCultureIgnoreCase));
             foreach (TabItem t in fresh) _order.Add(t.Key);
             items.Sort((a, b) => _order.IndexOf(a.Key).CompareTo(_order.IndexOf(b.Key)));
+            SaveSession(items);
+            foreach (IntPtr root in new List<IntPtr>(_watchers.Keys))
+                if (!Native.IsWindow(root)) { _watchers[root].Release(); _watchers.Remove(root); }
 
             foreach (string key in new List<string>(_panes.Keys))
                 if (!wins.ContainsKey(key)) RemovePane(key);
@@ -652,6 +780,184 @@ namespace OfficeTabsLite
         {
             TabColorStore.Set(key, path, color);
             Sync();
+        }
+
+        // ---------- the window's close button ----------
+        private void WatchClose(string key)
+        {
+            IntPtr root = RootOf(key);
+            if (root != IntPtr.Zero && !_watchers.ContainsKey(root)) _watchers[root] = new CloseWatcher(this, root);
+        }
+
+        // The user closed a document window (X, Alt+F4, the window menu). With several files
+        // open, ask whether to close just this file or all of them (or do what they chose with
+        // "Don't ask me again"). Returns true when the close is taken over.
+        internal bool OnWindowClose(IntPtr root, IWin32Window owner)
+        {
+            if (_closingTabs || _closeAllowed.Remove(root)) return false;
+            if (OpenKeys().Count <= 1) return false;
+            TabsSettings s = TabsSettings.Load();
+            if (s.WindowClose == CloseAction.CloseFile) return false;
+            // Word's own X button is still tracking the mouse here and would dismiss a dialog
+            // at once, so decide after the click is over.
+            Later(1, delegate { DecideClose(root, owner, s); });
+            return true;
+        }
+
+        private void DecideClose(IntPtr root, IWin32Window owner, TabsSettings s)
+        {
+            List<string> keys = OpenKeys();
+            CloseAction action = s.WindowClose;
+            if (action == CloseAction.Ask)
+            {
+                using (var ask = new CloseAskForm(_appName, keys.Count))
+                {
+                    if (ask.ShowDialog(owner) != DialogResult.OK) return;
+                    action = ask.Choice;
+                    if (ask.DontAsk) { s.WindowClose = action; s.Save(); _settings = s; }
+                }
+            }
+            if (!Native.IsWindow(root)) return;
+            if (action == CloseAction.CloseFile)
+            {
+                _closeAllowed.Add(root);
+                Native.PostMessage(root, Native.WM_SYSCOMMAND, new IntPtr(Native.SC_CLOSE), IntPtr.Zero);
+                return;
+            }
+            _sessionFrozen = true;
+            CloseAllFrom(root, keys.Find(k => RootOf(k) == root));
+        }
+
+        private List<string> OpenKeys()
+        {
+            var keys = new List<string>();
+            foreach (object w in GetWindows())
+            {
+                string k = KeyOf(w);
+                if (k != null && !keys.Contains(k)) keys.Add(k);
+            }
+            return keys;
+        }
+
+        // Closes every other file (Office asks about unsaved changes for each), then lets this
+        // window close the usual way, which also quits the app. Stops if the user cancels one.
+        private void CloseAllFrom(IntPtr root, string mine)
+        {
+            List<string> others = OpenKeys();
+            others.Remove(mine);
+            CloseTabs(others);
+            int left = 0;
+            foreach (object w in GetWindows()) if (KeyOf(w) != mine) left++;
+            if (left > 0 || !Native.IsWindow(root)) { _sessionFrozen = false; return; }
+            _closeAllowed.Add(root);
+            Native.PostMessage(root, Native.WM_SYSCOMMAND, new IntPtr(Native.SC_CLOSE), IntPtr.Zero);
+        }
+
+        // ---------- keyboard and mouse wheel ----------
+        // Ctrl+Tab / Ctrl+Shift+Tab, only in a document window (dialogs keep their own Ctrl+Tab)
+        // and only when there is another file to switch to.
+        internal bool OnCtrlTab(bool back)
+        {
+            if (!_settings.CtrlTab || !_watchers.ContainsKey(Native.GetAncestor(Native.GetForegroundWindow(), Native.GA_ROOT)))
+                return false;
+            if (GetWindows().Count < 2) return false;
+            Later(1, delegate { StepTab(back ? -1 : +1); });
+            return true;
+        }
+
+        // Next/previous tab in the order shown on the strip.
+        internal void StepTab(int delta)
+        {
+            var open = new HashSet<string>();
+            foreach (object w in GetWindows()) { string k = KeyOf(w); if (k != null) open.Add(k); }
+            List<string> keys = _order.FindAll(open.Contains);
+            if (keys.Count < 2) return;
+            string active = null;
+            try { active = KeyOf(((dynamic)_app).ActiveWindow); } catch { }
+            int i = Math.Max(0, keys.IndexOf(active));
+            ActivateTab(keys[((i + delta) % keys.Count + keys.Count) % keys.Count]);
+        }
+
+        // ---------- recently closed files ----------
+        // A window is gone for good: remember its file, unless that file is still open elsewhere.
+        private void NoteClosed(string key, List<TabItem> open)
+        {
+            string path;
+            if (!_lastPath.TryGetValue(key, out path)) return;
+            _lastPath.Remove(key);
+            if (open.Exists(t => string.Equals(t.Path, path, StringComparison.OrdinalIgnoreCase))) return;
+            FileLists.PushClosed(_appName, path);
+        }
+
+        // Closed files that aren't open again right now.
+        internal List<string> RecentlyClosed()
+        {
+            var open = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string path in _lastPath.Values) open.Add(path);
+            List<string> list = FileLists.Get("Closed." + _appName);
+            list.RemoveAll(open.Contains);
+            return list;
+        }
+
+        internal void ReopenClosed()
+        {
+            List<string> list = RecentlyClosed();
+            if (list.Count > 0) OpenFile(list[0]);
+        }
+
+        internal void OpenFile(string path)
+        {
+            FileLists.RemoveClosed(_appName, path);
+            if (!File.Exists(path))
+            {
+                MessageBox.Show("This file no longer exists:\n" + path, "Office Tabs Lite",
+                                MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            try { OpenInApp(path); } catch { }
+            Sync();
+        }
+
+        private void OpenInApp(string path)
+        {
+            dynamic app = _app;
+            if (_appName == "Word") app.Documents.Open(path);
+            else if (_appName == "Excel") app.Workbooks.Open(path);
+            else app.Presentations.Open(path);
+        }
+
+        // ---------- session (files open last time) ----------
+        private void SaveSession(List<TabItem> items)
+        {
+            if (!_sessionReady || _sessionFrozen) return;
+            var files = new List<string>();
+            foreach (TabItem t in items) if (t.Path != null && !files.Contains(t.Path)) files.Add(t.Path);
+            if (_session != null && files.Count == _session.Count && files.TrueForAll(_session.Contains) &&
+                _session.TrueForAll(files.Contains)) { _sessionShrinkTicks = 0; return; }
+            // Quitting closes the files one by one before the add-in is told; a shorter list
+            // only counts once it has stayed that way for 3 seconds.
+            if (_session != null && files.Count < _session.Count && ++_sessionShrinkTicks < 15) return;
+            _sessionShrinkTicks = 0;
+            _session = files;
+            FileLists.Set("Session." + _appName, files);
+        }
+
+        // Reopens the files that were open when the app was last closed (if turned on).
+        private void RestoreSession()
+        {
+            try
+            {
+                if (!_settings.RestoreSession || _app == null || !(bool)((dynamic)_app).Visible) return;
+                var open = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (object w in GetWindows()) { string p = PathOf(DocOf(w)); if (p != null) open.Add(p); }
+                foreach (string path in FileLists.Get("Session." + _appName))
+                {
+                    if (open.Contains(path) || !File.Exists(path)) continue;
+                    try { OpenInApp(path); open.Add(path); } catch { }
+                }
+            }
+            catch { }
+            finally { _sessionReady = true; }
         }
 
         // Make the document windows behave like one tabbed window: the active window takes
@@ -982,6 +1288,149 @@ namespace OfficeTabsLite
         }
     }
 
+    // ---- Close button of a document window ----
+
+    // Watches one document window's messages for the user closing it (X, Alt+F4, window menu)
+    // and lets the add-in ask "this file or all files?" first.
+    internal sealed class CloseWatcher : NativeWindow
+    {
+        private Connect _host;
+        private bool _passing;   // an allowed SC_CLOSE is running: let the WM_CLOSE it sends through
+
+        public CloseWatcher(Connect host, IntPtr root)
+        {
+            _host = host;
+            try { AssignHandle(root); } catch { }
+        }
+
+        public void Release()
+        {
+            _host = null;
+            try { if (Handle != IntPtr.Zero) ReleaseHandle(); } catch { }
+        }
+
+        // Office's own X button sends a bare WM_CLOSE, as does Application.Quit and anything
+        // else closing the window by code. Only the first is the user: the mouse is on the
+        // caption buttons at the top-right corner.
+        private bool MouseOnCloseButton()
+        {
+            Native.RECT r;
+            if (!Native.GetWindowRect(Handle, out r)) return false;
+            Point p = Cursor.Position;
+            return p.Y >= r.Top && p.Y < r.Top + 80 && p.X <= r.Right && p.X > r.Right - 240;
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            bool sysClose = m.Msg == Native.WM_SYSCOMMAND && (m.WParam.ToInt64() & 0xFFF0) == Native.SC_CLOSE;
+            bool xClose = m.Msg == Native.WM_CLOSE && !_passing && MouseOnCloseButton();
+            if (_host != null && (sysClose || xClose))
+            {
+                bool taken = false;
+                try { taken = _host.OnWindowClose(Handle, this); } catch { }
+                if (taken) return;
+                if (sysClose)
+                {
+                    _passing = true;
+                    try { base.WndProc(ref m); } finally { _passing = false; }
+                    return;
+                }
+            }
+            base.WndProc(ref m);
+        }
+    }
+
+    // Keyboard hook on Office's UI thread only: Ctrl+Tab / Ctrl+Shift+Tab switch tabs.
+    internal sealed class KeyHook : IDisposable
+    {
+        private readonly Connect _host;
+        private readonly Native.HookProc _proc;   // kept referenced: Windows calls it
+        private IntPtr _hook;
+
+        private KeyHook(Connect host)
+        {
+            _host = host;
+            _proc = Proc;
+        }
+
+        public static KeyHook Install(Connect host)
+        {
+            var k = new KeyHook(host);
+            k._hook = Native.SetWindowsHookEx(Native.WH_KEYBOARD, k._proc, IntPtr.Zero, Native.GetCurrentThreadId());
+            return k._hook == IntPtr.Zero ? null : k;
+        }
+
+        private IntPtr Proc(int code, IntPtr wParam, IntPtr lParam)
+        {
+            try
+            {
+                bool keyDown = (lParam.ToInt64() & 0x80000000L) == 0;
+                if (code == 0 && keyDown && wParam.ToInt32() == Native.VK_TAB &&
+                    Native.GetKeyState(Native.VK_CONTROL) < 0 && Native.GetKeyState(Native.VK_MENU) >= 0 &&
+                    _host.OnCtrlTab(Native.GetKeyState(Native.VK_SHIFT) < 0))
+                    return new IntPtr(1);
+            }
+            catch { }
+            return Native.CallNextHookEx(_hook, code, wParam, lParam);
+        }
+
+        public void Dispose()
+        {
+            if (_hook != IntPtr.Zero) { Native.UnhookWindowsHookEx(_hook); _hook = IntPtr.Zero; }
+        }
+    }
+
+    // "Close all files or only this one?" with "Don't ask me again".
+    internal sealed class CloseAskForm : Form
+    {
+        public CloseAction Choice = CloseAction.CloseAll;
+        private readonly CheckBox _dontAsk = new CheckBox();
+
+        public bool DontAsk { get { return _dontAsk.Checked; } }
+
+        public CloseAskForm(string app, int count)
+        {
+            AutoScaleDimensions = new SizeF(96F, 96F);
+            AutoScaleMode = AutoScaleMode.Dpi;
+            Text = "Office Tabs Lite";
+            Font = new Font("Segoe UI", 9.75f);
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false;
+            MinimizeBox = false;
+            ShowInTaskbar = false;
+            StartPosition = FormStartPosition.CenterParent;
+            BackColor = Color.White;
+            ClientSize = new Size(460, 196);
+
+            var icon = new PictureBox { Image = SystemIcons.Question.ToBitmap(), Location = new Point(20, 22), Size = new Size(32, 32) };
+            var text = new Label
+            {
+                Text = "You have " + count + " files open in " + app + ".\nClose all of them, or only this one?",
+                AutoSize = true, Location = new Point(66, 22)
+            };
+            _dontAsk.Text = "Don't ask me again";
+            _dontAsk.AutoSize = true;
+            _dontAsk.Location = new Point(68, 74);
+            var note = new Label
+            {
+                Text = "Change it later in Office Tabs Lite Center.",
+                AutoSize = true, ForeColor = Color.FromArgb(105, 105, 105), Location = new Point(86, 100)
+            };
+
+            var bottom = new Panel { Dock = DockStyle.Bottom, Height = 58, BackColor = Color.FromArgb(243, 243, 243) };
+            var all = new Button { Text = "Close All", Size = new Size(118, 32), Location = new Point(70, 13) };
+            var one = new Button { Text = "Close This File", Size = new Size(130, 32), Location = new Point(196, 13) };
+            var cancel = new Button { Text = "Cancel", Size = new Size(110, 32), Location = new Point(334, 13), DialogResult = DialogResult.Cancel };
+            all.Click += delegate { Choice = CloseAction.CloseAll; DialogResult = DialogResult.OK; };
+            one.Click += delegate { Choice = CloseAction.CloseFile; DialogResult = DialogResult.OK; };
+            bottom.Controls.AddRange(new Control[] { all, one, cancel });
+
+            Controls.AddRange(new Control[] { icon, text, _dontAsk, note, bottom });
+            AcceptButton = all;
+            CancelButton = cancel;
+        }
+    }
+
     // ---- Snapshot that hides a new window while Office builds it ----
 
     // A topmost, click-through, non-activating layered window showing a picture of the current
@@ -1160,6 +1609,8 @@ namespace OfficeTabsLite
         private readonly List<Rectangle> _tabRects = new List<Rectangle>();
         private readonly List<Rectangle> _closeRects = new List<Rectangle>();
         private Rectangle _plusRect;
+        private int _scrollX;           // how far the tabs are scrolled when they don't all fit
+        private bool _overflow;
         private int _hoverTab = -1;
         private bool _hoverClose;
         private bool _hoverPlus;
@@ -1361,7 +1812,25 @@ namespace OfficeTabsLite
             for (int i = 0; i < n; i++)
                 widths[i] = Math.Max(1, (int)Math.Round(widths[i] * GrowthOf(_items[i].Key)));
 
-            int x = 6;
+            // Too many tabs to fit even at their narrowest: scroll so the active tab is in view
+            // (the wheel or Ctrl+Tab reach the others) and keep + at the right edge.
+            int end = 6, activeLeft = -1, activeRight = -1;
+            for (int i = 0; i < n; i++)
+            {
+                if (_items[i].Key == _mine) { activeLeft = end; activeRight = end + widths[i]; }
+                end += widths[i] + gap;
+            }
+            int visibleRight = Width - 40;
+            _overflow = end > visibleRight;
+            if (!_overflow) _scrollX = 0;
+            else
+            {
+                if (activeLeft >= 0 && activeLeft - _scrollX < 6) _scrollX = activeLeft - 6;
+                if (activeRight >= 0 && activeRight - _scrollX > visibleRight) _scrollX = activeRight - visibleRight;
+                _scrollX = Math.Max(0, Math.Min(_scrollX, end - visibleRight));
+            }
+
+            int x = 6 - _scrollX;
             for (int i = 0; i < n; i++)
             {
                 var r = new Rectangle(x, top, widths[i], height);
@@ -1370,7 +1839,7 @@ namespace OfficeTabsLite
                 _closeRects.Add(new Rectangle(closeRight - 16, r.Top + (r.Height - 16) / 2, 16, 16));
                 x += widths[i] + gap;
             }
-            _plusRect = new Rectangle(x + 5, top + (height - 22) / 2, 28, 22);
+            _plusRect = new Rectangle(_overflow ? Width - 34 : x + 5, top + (height - 22) / 2, 28, 22);
         }
 
         // Outline of one tab; the bottom is left open so it merges into the strip.
@@ -1457,7 +1926,9 @@ namespace OfficeTabsLite
             using (var border = new Pen(Border))
                 g.DrawLine(border, 0, Height - 1, Width, Height - 1);
 
-            // inactive tabs first, the active one last so it sits on top of the bottom line
+            // inactive tabs first, the active one last so it sits on top of the bottom line;
+            // scrolled tabs stop short of the + button
+            if (_overflow) g.SetClip(new Rectangle(0, 0, Math.Max(1, Width - 38), Height));
             int activeIndex = -1;
             for (int i = 0; i < _items.Count; i++)
             {
@@ -1465,6 +1936,7 @@ namespace OfficeTabsLite
                 PaintTab(g, i, false);
             }
             if (activeIndex >= 0) PaintTab(g, activeIndex, true);
+            g.ResetClip();
 
             PaintPlus(g);
 
@@ -1514,6 +1986,19 @@ namespace OfficeTabsLite
 
             var menu = new ContextMenuStrip();
             AddItem(menu, "New", live, delegate { AnimateThenNew(host); });
+            List<string> closed = live ? host.RecentlyClosed() : new List<string>();
+            AddItem(menu, "Reopen Closed File", closed.Count > 0, delegate { host.ReopenClosed(); });
+            var recent = new ToolStripMenuItem("Recently Closed");
+            recent.Enabled = closed.Count > 0;
+            foreach (string file in closed)
+            {
+                string f = file;
+                var mi = new ToolStripMenuItem(Path.GetFileName(f));
+                mi.ToolTipText = f;
+                mi.Click += delegate { Defer(delegate { host.OpenFile(f); }); };
+                recent.DropDownItems.Add(mi);
+            }
+            menu.Items.Add(recent);
             menu.Items.Add(new ToolStripSeparator());
             AddItem(menu, "Save", live, delegate { host.SaveTab(key); });
             AddItem(menu, "Save All", live, delegate { host.SaveAll(); });
@@ -1606,9 +2091,10 @@ namespace OfficeTabsLite
                     g.DrawLine(bar, r.Left + 7, r.Top + 1, r.Right - 7 - (_style == TabStyle.Trapezoid ? Slant : 0), r.Top + 1);
 
             // While the tab grows, keep its contents inside it.
-            g.SetClip(new Rectangle(r.Left, r.Top, r.Width, r.Height + 1));
+            Region outer = g.Clip;
+            g.SetClip(new Rectangle(r.Left, r.Top, r.Width, r.Height + 1), CombineMode.Intersect);
             try { PaintTabContents(g, i, item, r, active, hover); }
-            finally { g.ResetClip(); }
+            finally { g.Clip = outer; outer.Dispose(); }
         }
 
         private void PaintTabContents(Graphics g, int i, TabItem item, Rectangle r, bool active, bool hover)
@@ -1813,6 +2299,20 @@ namespace OfficeTabsLite
                 string key = _items[tab].Key;
                 Defer(delegate { host.CloseTab(key); });
             }
+        }
+
+        // Wheel over the strip: previous/next tab.
+        protected override void OnMouseWheel(MouseEventArgs e)
+        {
+            base.OnMouseWheel(e);
+            try
+            {
+                Connect host = Connect.Current;
+                if (_preview || host == null || !host.WheelSwitch || e.Delta == 0) return;
+                int delta = e.Delta > 0 ? -1 : +1;
+                Defer(delegate { host.StepTab(delta); });
+            }
+            catch { }
         }
 
         protected override void OnMouseDoubleClick(MouseEventArgs e)

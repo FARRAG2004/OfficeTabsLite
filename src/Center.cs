@@ -19,8 +19,8 @@ using OfficeTabsLite;
 
 [assembly: AssemblyTitle("Office Tabs Lite Center")]
 [assembly: AssemblyProduct("Office Tabs Lite")]
-[assembly: AssemblyVersion("2.7.0.0")]
-[assembly: AssemblyFileVersion("2.7.0.0")]
+[assembly: AssemblyVersion("2.8.0.0")]
+[assembly: AssemblyFileVersion("2.8.0.0")]
 
 namespace OfficeTabsLiteCenter
 {
@@ -40,7 +40,7 @@ namespace OfficeTabsLiteCenter
 
     internal class CenterForm : Form
     {
-        const string Version = "2.7";
+        const string Version = "2.8";
         static readonly Color NavBack = Color.FromArgb(243, 243, 243);
         static readonly Color Accent = Color.FromArgb(43, 87, 154);
         static readonly Color Muted = Color.FromArgb(105, 105, 105);
@@ -54,6 +54,8 @@ namespace OfficeTabsLiteCenter
         readonly RadioButton _rounded = new RadioButton(), _trapezoid = new RadioButton(), _flat = new RadioButton();
         readonly CheckBox _group = new CheckBox(), _icons = new CheckBox(), _doubleClick = new CheckBox(), _hideSingle = new CheckBox();
         readonly TabStrip _preview = new TabStrip();
+        readonly RadioButton _closeAsk = new RadioButton(), _closeFile = new RadioButton(), _closeAll = new RadioButton();
+        readonly CheckBox _restore = new CheckBox(), _ctrlTab = new CheckBox(), _wheel = new CheckBox();
 
         public CenterForm()
         {
@@ -88,7 +90,7 @@ namespace OfficeTabsLiteCenter
             _navBar.BackColor = Accent;
             _navBar.Size = new Size(4, 30);
             nav.Controls.Add(_navBar);
-            string[] names = { "General", "Appearance", "Advanced", "About" };
+            string[] names = { "General", "Appearance", "Behavior", "Advanced", "About" };
             _navItems = new Label[names.Length];
             for (int i = 0; i < names.Length; i++)
             {
@@ -105,7 +107,7 @@ namespace OfficeTabsLiteCenter
 
             // pages
             var content = new Panel { Dock = DockStyle.Fill, BackColor = Color.White };
-            _pages = new[] { BuildGeneral(), BuildAppearance(), BuildAdvanced(), BuildAbout() };
+            _pages = new[] { BuildGeneral(), BuildAppearance(), BuildBehavior(), BuildAdvanced(), BuildAbout() };
             foreach (Panel p in _pages) content.Controls.Add(p);
 
             Controls.Add(content);
@@ -168,6 +170,40 @@ namespace OfficeTabsLiteCenter
             return p;
         }
 
+        Panel BuildBehavior()
+        {
+            Panel p = NewPage("Behavior");
+            AddSection(p, "When I close a window (X) with several files open", 64);
+            _closeAsk.Text = "Ask me each time";
+            _closeFile.Text = "Close only that file";
+            _closeAll.Text = "Close all files";
+            RadioButton[] radios = { _closeAsk, _closeFile, _closeAll };
+            for (int i = 0; i < radios.Length; i++)
+            {
+                radios[i].AutoSize = true;
+                radios[i].Location = new Point(28, 98 + i * 28);
+                p.Controls.Add(radios[i]);
+            }
+
+            AddSection(p, "Startup", 190);
+            _restore.Text = "Reopen the files that were open last time";
+            _restore.AutoSize = true;
+            _restore.Location = new Point(28, 224);
+            p.Controls.Add(_restore);
+
+            AddSection(p, "Keyboard and mouse", 268);
+            _ctrlTab.Text = "Ctrl+Tab / Ctrl+Shift+Tab switch to the next / previous tab";
+            _wheel.Text = "Mouse wheel over the tab bar switches tabs";
+            CheckBox[] checks = { _ctrlTab, _wheel };
+            for (int i = 0; i < checks.Length; i++)
+            {
+                checks[i].AutoSize = true;
+                checks[i].Location = new Point(28, 302 + i * 30);
+                p.Controls.Add(checks[i]);
+            }
+            return p;
+        }
+
         Panel BuildAdvanced()
         {
             Panel p = NewPage("Advanced Options");
@@ -199,10 +235,11 @@ namespace OfficeTabsLiteCenter
             {
                 Text = "Adds a tab for every open file to Word, Excel and PowerPoint, right under the\n" +
                        "ribbon, and keeps all files of an app under one taskbar button.\n\n" +
-                       "Click a tab to switch files, x or middle-click to close one, + to open a new one.",
+                       "Click a tab to switch files, x or middle-click to close one, + to open a new one.\n" +
+                       "Ctrl+Tab or the mouse wheel moves between tabs; right-click a tab for more.",
                 AutoSize = true, Location = new Point(28, 120)
             });
-            AddNote(p, "Original work. Not affiliated with Microsoft or ExtendOffice.", 215);
+            AddNote(p, "Original work. Not affiliated with Microsoft or ExtendOffice.", 240);
             return p;
         }
 
@@ -225,6 +262,12 @@ namespace OfficeTabsLiteCenter
             _icons.Checked = s.ShowIcons;
             _doubleClick.Checked = s.NewOnDoubleClick;
             _hideSingle.Checked = s.HideSingleTab;
+            _closeAsk.Checked = s.WindowClose == CloseAction.Ask;
+            _closeFile.Checked = s.WindowClose == CloseAction.CloseFile;
+            _closeAll.Checked = s.WindowClose == CloseAction.CloseAll;
+            _restore.Checked = s.RestoreSession;
+            _ctrlTab.Checked = s.CtrlTab;
+            _wheel.Checked = s.WheelSwitch;
             UpdatePreview();
         }
 
@@ -250,6 +293,11 @@ namespace OfficeTabsLiteCenter
                 s.ShowIcons = _icons.Checked;
                 s.NewOnDoubleClick = _doubleClick.Checked;
                 s.HideSingleTab = _hideSingle.Checked;
+                s.WindowClose = _closeFile.Checked ? CloseAction.CloseFile
+                              : _closeAll.Checked ? CloseAction.CloseAll : CloseAction.Ask;
+                s.RestoreSession = _restore.Checked;
+                s.CtrlTab = _ctrlTab.Checked;
+                s.WheelSwitch = _wheel.Checked;
                 s.Save();
 
                 string resetDone = "";

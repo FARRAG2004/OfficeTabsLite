@@ -10,9 +10,12 @@ Tabs for Microsoft Word, Excel and PowerPoint: a tab strip under the ribbon with
 - `+` or double-click the empty space for a new file, with a slide-in animation.
 - Right-click menu: Save, Save All, Close Other Tabs, Close Tabs to the Right, Close All, Copy Full Path, Open Containing Folder, Tab Color.
 - Unsaved-changes dot, tab colors, drag to reorder, full path on hover.
+- Closing the window (X) with several files open asks: close all files, or only this one (with "Don't ask me again").
+- `Ctrl+Tab` / `Ctrl+Shift+Tab` and the mouse wheel over the strip switch tabs; with many tabs the strip scrolls to keep the active one in view.
+- Reopen Closed File and a Recently Closed list in the tab menu; optionally reopen last time's files when the app starts.
 - One window position and one taskbar button for all files of an app.
 - Three tab styles (Rounded, Trapezoid, Flat).
-- **Office Tabs Lite Center** settings app: turn tabs on or off per app, appearance, reset and repair.
+- **Office Tabs Lite Center** settings app: turn tabs on or off per app, appearance, behavior (close button, startup, keyboard and mouse), reset and repair.
 
 The full illustrated guide (Arabic) is in [guide/OfficeTabsLite-Guide.html](guide/OfficeTabsLite-Guide.html).
 

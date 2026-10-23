@@ -106,7 +106,7 @@
     <span style="background:var(--xl)">Excel</span>
     <span style="background:var(--ppt)">PowerPoint</span>
   </div>
-  <div class="ver">Version 2.7</div>
+  <div class="ver">Version 2.8</div>
 </div>
 
 <!-- ============ contents ============ -->
@@ -117,6 +117,7 @@
     <li>التبويبات في Word و Excel و PowerPoint</li>
     <li>التحكم في التبويبات <span>— فتح، تنقل، قفل</span></li>
     <li>قائمة الكليك يمين، ألوان التبويبات، وترتيبها بالسحب</li>
+    <li>قفل النافذة، الاختصارات، واسترجاع الملفات</li>
     <li>فتح ملف جديد بحركة سلسة</li>
     <li>نافذة واحدة وزر واحد على شريط المهام</li>
     <li>أشكال التبويبات</li>
@@ -143,6 +144,9 @@
     <li>قائمة كليك يمين كاملة: حفظ، حفظ الكل، قفل الباقي، نسخ المسار، فتح المجلد…</li>
     <li>نقطة على التبويب لو الملف فيه تغييرات مش محفوظة.</li>
     <li>تلوين التبويبات، وترتيبها بالسحب والإفلات.</li>
+    <li>لما تقفل النافذة بـ X يسألك: تقفل الملف ده بس ولا كل الملفات.</li>
+    <li>التنقل بين التبويبات بـ <b class="en">Ctrl+Tab</b> أو بعجلة الماوس.</li>
+    <li>إعادة فتح ملف اتقفل بالغلط، وفتح ملفات المرة اللي فاتت تلقائي.</li>
     <li>كل ملفات البرنامج في <b>نافذة واحدة</b> و<b>زر واحد</b> على شريط المهام.</li>
     <li>3 أشكال للتبويبات تختار منها، وبرنامج إعدادات كامل.</li>
     <li>تثبيت بملف واحد، من غير صلاحيات المسؤول (Admin).</li>
@@ -181,7 +185,10 @@
     <tr><td class="act">تمرير الماوس على تبويب</td><td>يظهر المسار الكامل للملف (أو اسمه لو لسه متحفظش).</td></tr>
     <tr><td class="act">كليك يمين على تبويب</td><td>قائمة بكل أوامر التبويب (القسم الجاي).</td></tr>
     <tr><td class="act">سحب تبويب يمين أو شمال</td><td>يغيّر ترتيب التبويبات.</td></tr>
+    <tr><td class="act">Ctrl+Tab / Ctrl+Shift+Tab</td><td>التبويب اللي بعده / اللي قبله.</td></tr>
+    <tr><td class="act">عجلة الماوس فوق الشريط</td><td>تتنقل بين التبويبات.</td></tr>
   </table>
+  <div class="tip">لو التبويبات كترت ومبقتش تكفي الشريط، الشريط بيتحرك لوحده علشان التبويب الحالي يفضل ظاهر، وزر + بيفضل في آخره.</div>
 </section>
 
 <!-- ============ 4 ============ -->
@@ -195,6 +202,8 @@
   </figure>
   <table>
     <tr><td class="act">New</td><td>ملف جديد.</td></tr>
+    <tr><td class="act">Reopen Closed File</td><td>يفتح تاني آخر ملف اتقفل.</td></tr>
+    <tr><td class="act">Recently Closed</td><td>قائمة بآخر 10 ملفات اتقفلت — اختار أي واحد يتفتح.</td></tr>
     <tr><td class="act">Save / Save All</td><td>حفظ الملف ده / حفظ كل الملفات اللي فيها تغييرات. الملف اللي عمره ما اتحفظ بيفتح نافذة «حفظ باسم».</td></tr>
     <tr><td class="act">Close</td><td>قفل الملف.</td></tr>
     <tr><td class="act">Close Other Tabs</td><td>قفل كل الملفات ماعدا ده.</td></tr>
@@ -224,9 +233,39 @@
   </section>
 </section>
 
-<!-- ============ 4 ============ -->
+<!-- ============ 5 ============ -->
 <section>
-  <h2><span class="num">5</span> فتح ملف جديد بحركة سلسة</h2>
+  <h2><span class="num">5</span> قفل النافذة، الاختصارات، واسترجاع الملفات</h2>
+  <h3>لما تدوس X بتاعة النافذة</h3>
+  <p>لو فاتح أكتر من ملف وضغطت <b>X</b> اللي فوق على يمين نافذة البرنامج (أو Alt+F4)، البرنامج بيسألك:</p>
+  <figure class="narrow">
+    <img src="img/close-ask.png" alt="">
+    <figcaption>رسالة القفل في Word وفيه 3 ملفات مفتوحة.</figcaption>
+  </figure>
+  <table>
+    <tr><td class="act">Close All</td><td>يقفل كل الملفات ويقفل البرنامج. أوفيس بيسألك عن الحفظ لكل ملف فيه تغييرات، ولو ضغطت Cancel في أي واحد القفل بيقف.</td></tr>
+    <tr><td class="act">Close This File</td><td>يقفل الملف اللي قدامك بس، والباقي يفضل مفتوح.</td></tr>
+    <tr><td class="act">Cancel</td><td>مفيش حاجة بتتقفل.</td></tr>
+    <tr><td class="act">Don't ask me again</td><td>يحفظ اختيارك، والمرة الجاية بيعمله على طول من غير ما يسأل.</td></tr>
+  </table>
+  <div class="tip">غيّرت رأيك بعد «Don't ask me again»؟ افتح <b class="en">Office Tabs Lite Center ← Behavior</b> واختار <b class="en">Ask me each time</b>.</div>
+  <p>لو فيه ملف واحد بس مفتوح، الـ X بتقفل البرنامج عادي من غير أي سؤال.</p>
+
+  <h3>فتح ملفات المرة اللي فاتت</h3>
+  <p>فعّل <b class="en">Reopen the files that were open last time</b> من صفحة Behavior، وأول ما تفتح البرنامج هيفتح لوحده الملفات اللي كانت مفتوحة لما قفلته (الملفات المحفوظة بس). الاختيار ده مقفول في الأول.</p>
+
+  <div style="break-inside:avoid">
+    <h3>صفحة Behavior في برنامج الإعدادات</h3>
+    <figure class="narrow">
+      <img src="img/center-behavior.png" alt="">
+      <figcaption>كل اختيارات القفل، والفتح التلقائي، والكيبورد والماوس في مكان واحد.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- ============ 6 ============ -->
+<section>
+  <h2><span class="num">6</span> فتح ملف جديد بحركة سلسة</h2>
   <p>لما تدوس <b>+</b>، تبويب <b class="en">New document</b> بيدخل الشريط بحركة ناعمة ويكبر لحد حجمه الكامل، وبعدها الملف الجديد بيظهر في نفس المكان بانتقال ناعم (Crossfade) — من غير شاشة بيضا ولا وميض.</p>
   <figure class="narrow">
     <img src="img/anim-frames.png" alt="">
@@ -237,7 +276,7 @@
 
 <!-- ============ 5 ============ -->
 <section>
-  <h2><span class="num">6</span> نافذة واحدة وزر واحد على شريط المهام</h2>
+  <h2><span class="num">7</span> نافذة واحدة وزر واحد على شريط المهام</h2>
   <p>كل ملفات البرنامج بتتجمّع وكأنها نافذة واحدة:</p>
   <ul>
     <li><b>زر واحد</b> على شريط المهام للبرنامج، بيعرض الملف الحالي بس — مهما كان عدد الملفات المفتوحة.</li>
@@ -253,7 +292,7 @@
 
 <!-- ============ 6 ============ -->
 <section>
-  <h2><span class="num">7</span> أشكال التبويبات</h2>
+  <h2><span class="num">8</span> أشكال التبويبات</h2>
   <p>تقدر تختار شكل التبويبات من برنامج الإعدادات (صفحة <b class="en">Appearance</b>)، والتغيير بيظهر في أوفيس خلال ثواني من غير ما تقفله.</p>
   <div class="style-row"><span class="label">Rounded</span><img src="img/style-Rounded.png" alt=""></div>
   <div class="style-row"><span class="label">Trapezoid</span><img src="img/style-Trapezoid.png" alt=""></div>
@@ -262,7 +301,7 @@
 
   <!-- ============ 7 ============ -->
   <section class="flow">
-    <h2><span class="num">8</span> تبويب <b class="en">Tabs</b> في الـ Ribbon</h2>
+    <h2><span class="num">9</span> تبويب <b class="en">Tabs</b> في الـ Ribbon</h2>
     <p>الإضافة بتضيف تبويب <b class="en">Tabs</b> في الـ Ribbon نفسه، وفيه:</p>
     <figure>
       <img src="img/ribbon-tabs.png" alt="">
@@ -280,8 +319,8 @@
 
 <!-- ============ 8 ============ -->
 <section>
-  <h2><span class="num">9</span> برنامج الإعدادات <b class="en">Office Tabs Lite Center</b></h2>
-  <p>تفتحه من اختصار سطح المكتب أو قائمة ابدأ، أو من زر <b class="en">Settings</b> في تبويب Tabs. فيه 4 صفحات:</p>
+  <h2><span class="num">10</span> برنامج الإعدادات <b class="en">Office Tabs Lite Center</b></h2>
+  <p>تفتحه من اختصار سطح المكتب أو قائمة ابدأ، أو من زر <b class="en">Settings</b> في تبويب Tabs. فيه 5 صفحات (صفحة <b class="en">Behavior</b> اتشرحت في القسم 5):</p>
   <div class="grid2">
     <figure>
       <img src="img/center-general.png" alt="">
@@ -307,16 +346,18 @@
     <li><b class="en">Double-click empty space to open a new file</b> — دبل كليك لملف جديد.</li>
     <li><b class="en">Hide the tab bar when only one file is open</b> — إخفاء الشريط لو فيه ملف واحد بس مفتوح، ويرجع تلقائي أول ما تفتح ملف تاني.</li>
   </ul>
-  <h3>صفحة Advanced</h3>
-  <ul>
-    <li><b>Reset</b>: لو أوفيس عطّل الإضافة (مثلًا بعد ما البرنامج اتقفل فجأة)، اختار البرنامج واضغط OK — الإضافة بترجع تشتغل.</li>
-    <li><b>Repair</b>: بيعيد تسجيل الإضافة من النسخة المتثبّتة لو حصل أي عطل.</li>
-  </ul>
+  <div style="break-inside:avoid">
+    <h3>صفحة Advanced</h3>
+    <ul>
+      <li><b>Reset</b>: لو أوفيس عطّل الإضافة (مثلًا بعد ما البرنامج اتقفل فجأة)، اختار البرنامج واضغط OK — الإضافة بترجع تشتغل.</li>
+      <li><b>Repair</b>: بيعيد تسجيل الإضافة من النسخة المتثبّتة لو حصل أي عطل.</li>
+    </ul>
+  </div>
 </section>
 
 <!-- ============ 9 ============ -->
 <section>
-  <h2><span class="num">10</span> التثبيت وإلغاء التثبيت</h2>
+  <h2><span class="num">11</span> التثبيت وإلغاء التثبيت</h2>
   <h3>التثبيت</h3>
   <ol class="steps">
     <li>اقفل Word و Excel و PowerPoint.</li>
@@ -334,7 +375,7 @@
 
   <!-- ============ 10 ============ -->
   <section class="flow">
-    <h2><span class="num">11</span> المتطلبات وملاحظات</h2>
+    <h2><span class="num">12</span> المتطلبات وملاحظات</h2>
     <table>
       <tr><th>المتطلب</th><th>التفاصيل</th></tr>
       <tr><td class="act">نظام التشغيل</td><td>Windows 10 أو Windows 11</td></tr>
@@ -347,7 +388,7 @@
       <li>فوق التبويبات فيه شريط صغير مكتوب عليه <b class="en">Tabs</b> — ده شريط أوفيس نفسه للوحات الإضافات، ومينفعش يتشال. لو قفلته بالـ × اللي عليه، رجّعه من زر <b class="en">Tab Bar</b>.</li>
       <li>فتح ملف جديد بياخد حوالي ثانية — نص الوقت ده هو وقت أوفيس نفسه في إنشاء الملف.</li>
     </ul>
-    <p class="foot">Office Tabs Lite 2.7 — عمل أصلي، ليس تابعًا لـ Microsoft أو ExtendOffice.</p>
+    <p class="foot">Office Tabs Lite 2.8 — عمل أصلي، ليس تابعًا لـ Microsoft أو ExtendOffice.</p>
   </section>
 </section>
 
