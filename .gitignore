@@ -1,0 +1,13 @@
+# build output: publish the installer through GitHub Releases instead
+build/
+dist/
+obj/
+*.zip
+
+# private notes about the commercial product, not for the public repo
+OfficeTab-RE-Report.md
+
+# development screenshots (one shows the Claude chat window)
+guide/img/word-full.png
+assets/before-after.png
+assets/anim-frames.png
