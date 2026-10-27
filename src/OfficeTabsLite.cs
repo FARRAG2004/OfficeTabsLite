@@ -29,7 +29,7 @@ using Microsoft.Win32;
 
 [assembly: AssemblyTitle("OfficeTabsLite")]
 [assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("2.9.0.0")]
+[assembly: AssemblyFileVersion("2.9.1.0")]
 [assembly: ComVisible(false)]
 
 namespace OfficeTabsLite
@@ -1241,8 +1241,11 @@ namespace OfficeTabsLite
                 }
                 else
                 {
-                    _taskbar.DeleteTab(root);
-                    _taskbarHidden.Add(root);
+                    // Only the first time a window goes inactive: re-issuing DeleteTab on a
+                    // window that's already hidden (every tab switch calls this for every
+                    // other open window, active or not) made Windows redraw/flicker the
+                    // taskbar button on every switch, even though nothing actually changed.
+                    if (_taskbarHidden.Add(root)) _taskbar.DeleteTab(root);
                 }
             }
             catch { }
