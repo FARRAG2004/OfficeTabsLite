@@ -29,7 +29,7 @@ using Microsoft.Win32;
 
 [assembly: AssemblyTitle("OfficeTabsLite")]
 [assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("2.8.0.0")]
+[assembly: AssemblyFileVersion("2.8.1.0")]
 [assembly: ComVisible(false)]
 
 namespace OfficeTabsLite
@@ -633,9 +633,11 @@ namespace OfficeTabsLite
 
             var items = new List<TabItem>();
             var wins = new Dictionary<string, object>();
+            var claimedFrames = new HashSet<IntPtr>();
             foreach (object w in GetWindows())
             {
-                string key = KeyOf(w);
+                string key = KeyOf(w, claimedFrames);
+                Claim(key, claimedFrames);
                 if (key == null || wins.ContainsKey(key)) continue;
                 wins[key] = w;
                 var t = new TabItem();
@@ -831,9 +833,11 @@ namespace OfficeTabsLite
         private List<string> OpenKeys()
         {
             var keys = new List<string>();
+            var claimed = new HashSet<IntPtr>();
             foreach (object w in GetWindows())
             {
-                string k = KeyOf(w);
+                string k = KeyOf(w, claimed);
+                Claim(k, claimed);
                 if (k != null && !keys.Contains(k)) keys.Add(k);
             }
             return keys;
@@ -861,8 +865,23 @@ namespace OfficeTabsLite
             if (!_settings.CtrlTab || !_watchers.ContainsKey(Native.GetAncestor(Native.GetForegroundWindow(), Native.GA_ROOT)))
                 return false;
             if (GetWindows().Count < 2) return false;
+            // In a Word table, Ctrl+Tab inserts a literal tab character in the current cell
+            // (plain Tab moves between cells) - a longstanding Word shortcut. Don't steal it there.
+            if (InWordTableCell()) return false;
             Later(1, delegate { StepTab(back ? -1 : +1); });
             return true;
+        }
+
+        private bool InWordTableCell()
+        {
+            if (_defaultExt != ".docx") return false;
+            try
+            {
+                const int wdWithInTable = 12;
+                dynamic app = _app;
+                return (bool)app.Selection.Information[wdWithInTable];
+            }
+            catch { return false; }
         }
 
         // Next/previous tab in the order shown on the strip.
@@ -1172,35 +1191,53 @@ namespace OfficeTabsLite
             return list;
         }
 
+        // Resolves every open window's key together, so two PowerPoint presentations that
+        // happen to share a file name (opened from different folders) get distinct frame
+        // windows instead of both matching the first one found (see KeyOf/FrameByCaption).
         private object FindWindow(string key)
         {
+            var claimed = new HashSet<IntPtr>();
             foreach (object w in GetWindows())
-                if (KeyOf(w) == key) return w;
+            {
+                string k = KeyOf(w, claimed);
+                if (k == key) return w;
+                Claim(k, claimed);
+            }
             return null;
         }
 
-        private static string KeyOf(dynamic w)
+        private static void Claim(string key, HashSet<IntPtr> claimed)
+        {
+            long h;
+            if (key != null && long.TryParse(key, out h)) claimed.Add(new IntPtr(h));
+        }
+
+        private static string KeyOf(dynamic w, HashSet<IntPtr> claimed = null)
         {
             try { long h = Convert.ToInt64(w.Hwnd); if (h > 0) return h.ToString(); } catch { }
             // PowerPoint's document windows expose no handle: find their frame window
-            // (class PPTFrameClass, title "<caption> - PowerPoint") in this process.
+            // (class PPTFrameClass, title "<caption> - PowerPoint") in this process. Two
+            // presentations with the same file name (different folders) share a caption;
+            // `claimed` excludes frames already assigned to another window in this same
+            // pass so they resolve to distinct windows instead of both matching the first.
             string caption = null;
             try { caption = CaptionOf(w); } catch { }
             if (caption == null) return null;
             // No frame yet (window still opening): skip it this round rather than giving it a
             // temporary key, which would make its tab jump and its pane be recreated.
-            IntPtr frame = FrameByCaption(caption);
+            IntPtr frame = FrameByCaption(caption, claimed);
             return frame != IntPtr.Zero ? frame.ToInt64().ToString() : null;
         }
 
         private static readonly uint OwnPid = (uint)Process.GetCurrentProcess().Id;
 
-        private static IntPtr FrameByCaption(string caption)
+        private static IntPtr FrameByCaption(string caption, HashSet<IntPtr> exclude = null)
         {
             IntPtr found = IntPtr.Zero;
             var text = new System.Text.StringBuilder(512);
             Native.EnumWindows(delegate (IntPtr h, IntPtr l)
             {
+                if (exclude != null && exclude.Contains(h)) return true;
                 uint pid;
                 Native.GetWindowThreadProcessId(h, out pid);
                 if (pid != OwnPid) return true;

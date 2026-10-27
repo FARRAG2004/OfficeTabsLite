@@ -20,14 +20,14 @@ using Microsoft.Win32;
 
 [assembly: AssemblyTitle("Office Tabs Lite Setup")]
 [assembly: AssemblyProduct("Office Tabs Lite")]
-[assembly: AssemblyVersion("2.8.0.0")]
-[assembly: AssemblyFileVersion("2.8.0.0")]
+[assembly: AssemblyVersion("2.8.1.0")]
+[assembly: AssemblyFileVersion("2.8.1.0")]
 
 namespace OfficeTabsLiteSetup
 {
     internal static class Program
     {
-        const string Version    = "2.8.0";
+        const string Version    = "2.8.1";
         const string CenterFile = "OfficeTabsLite-Center.exe";
         const string ShortcutName = "Office Tabs Lite Center.lnk";
         const string SetupFile  = "OfficeTabsLite-Setup.exe";

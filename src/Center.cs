@@ -19,8 +19,8 @@ using OfficeTabsLite;
 
 [assembly: AssemblyTitle("Office Tabs Lite Center")]
 [assembly: AssemblyProduct("Office Tabs Lite")]
-[assembly: AssemblyVersion("2.8.0.0")]
-[assembly: AssemblyFileVersion("2.8.0.0")]
+[assembly: AssemblyVersion("2.8.1.0")]
+[assembly: AssemblyFileVersion("2.8.1.0")]
 
 namespace OfficeTabsLiteCenter
 {
@@ -40,7 +40,7 @@ namespace OfficeTabsLiteCenter
 
     internal class CenterForm : Form
     {
-        const string Version = "2.8";
+        const string Version = "2.8.1";
         static readonly Color NavBack = Color.FromArgb(243, 243, 243);
         static readonly Color Accent = Color.FromArgb(43, 87, 154);
         static readonly Color Muted = Color.FromArgb(105, 105, 105);

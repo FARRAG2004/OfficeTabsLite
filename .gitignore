@@ -4,6 +4,9 @@ dist/
 obj/
 *.zip
 
+# graphify knowledge-graph output (local analysis artifact, not project content)
+graphify-out/
+
 # private notes about the commercial product, not for the public repo
 OfficeTab-RE-Report.md
 
