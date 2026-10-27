@@ -29,7 +29,7 @@ using Microsoft.Win32;
 
 [assembly: AssemblyTitle("OfficeTabsLite")]
 [assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("2.9.1.0")]
+[assembly: AssemblyFileVersion("2.9.2.0")]
 [assembly: ComVisible(false)]
 
 namespace OfficeTabsLite
@@ -648,8 +648,22 @@ namespace OfficeTabsLite
         {
             object w = FindWindow(key);
             if (w == null) return;
-            if (PinStore.Get(key, PathOf(DocOf(w)))) return;   // pinned: must be unpinned first
-            // Close through Office's own command so it asks about unsaved changes as usual.
+            dynamic doc = DocOf(w);
+            if (PinStore.Get(key, PathOf(doc))) return;   // pinned: must be unpinned first
+            _closingTabs = true;
+            try
+            {
+                // Nothing to lose: close the document directly, without bringing its window
+                // to the front first. This is what makes closing several files at once
+                // (Close All / Close Other Tabs) look like each one flashing to the front
+                // before closing, one after another - skipping it for clean files makes a
+                // bulk close of mostly-saved files close in one smooth step instead.
+                if (!IsModified(doc) && CloseClean(doc)) { Sync(); return; }
+            }
+            catch { }
+            finally { _closingTabs = false; }
+            // Has unsaved changes (or the direct close above didn't apply): go through
+            // Office's own command so it asks about saving as usual.
             _closingTabs = true;
             try
             {
@@ -659,6 +673,22 @@ namespace OfficeTabsLite
             catch { }
             finally { _closingTabs = false; }
             Sync();
+        }
+
+        // Closes a document with no unsaved changes, without activating its window first.
+        // Returns false (caller falls back to the normal activate-and-ask path) if doc is
+        // null or the app-specific Close call isn't available for some reason.
+        private bool CloseClean(dynamic doc)
+        {
+            if (doc == null) return false;
+            try
+            {
+                if (_defaultExt == ".docx") doc.Close(0);        // wdDoNotSaveChanges - nothing pending anyway
+                else if (_defaultExt == ".xlsx") doc.Close(false);  // SaveChanges:=False
+                else doc.Close();                                 // PowerPoint: no SaveChanges parameter
+                return true;
+            }
+            catch { return false; }
         }
 
         // Office draws a new window blank (no ribbon, a loading spinner) while it builds it,
