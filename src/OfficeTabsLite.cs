@@ -758,9 +758,14 @@ namespace OfficeTabsLite
 
         internal void SaveAll()
         {
+            // Batch-resolved like Sync()'s loop: without this, two same-named PowerPoint
+            // files would both resolve to the first one's key, and the second's changes
+            // would never reach SaveTab.
+            var claimed = new HashSet<IntPtr>();
             foreach (object w in GetWindows())
             {
-                string key = KeyOf(w);
+                string key = KeyOf(w, claimed);
+                Claim(key, claimed);
                 if (key != null && IsModified(DocOf(w))) SaveTab(key);
             }
         }
@@ -850,8 +855,7 @@ namespace OfficeTabsLite
             List<string> others = OpenKeys();
             others.Remove(mine);
             CloseTabs(others);
-            int left = 0;
-            foreach (object w in GetWindows()) if (KeyOf(w) != mine) left++;
+            int left = OpenKeys().FindAll(k => k != mine).Count;
             if (left > 0 || !Native.IsWindow(root)) { _sessionFrozen = false; return; }
             _closeAllowed.Add(root);
             Native.PostMessage(root, Native.WM_SYSCOMMAND, new IntPtr(Native.SC_CLOSE), IntPtr.Zero);
@@ -887,8 +891,7 @@ namespace OfficeTabsLite
         // Next/previous tab in the order shown on the strip.
         internal void StepTab(int delta)
         {
-            var open = new HashSet<string>();
-            foreach (object w in GetWindows()) { string k = KeyOf(w); if (k != null) open.Add(k); }
+            var open = new HashSet<string>(OpenKeys());
             List<string> keys = _order.FindAll(open.Contains);
             if (keys.Count < 2) return;
             string active = null;
