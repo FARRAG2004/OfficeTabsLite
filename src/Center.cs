@@ -19,8 +19,8 @@ using OfficeTabsLite;
 
 [assembly: AssemblyTitle("Office Tabs Lite Center")]
 [assembly: AssemblyProduct("Office Tabs Lite")]
-[assembly: AssemblyVersion("2.8.1.0")]
-[assembly: AssemblyFileVersion("2.8.1.0")]
+[assembly: AssemblyVersion("2.9.0.0")]
+[assembly: AssemblyFileVersion("2.9.0.0")]
 
 namespace OfficeTabsLiteCenter
 {
@@ -40,7 +40,7 @@ namespace OfficeTabsLiteCenter
 
     internal class CenterForm : Form
     {
-        const string Version = "2.8.1";
+        const string Version = "2.9.0";
         static readonly Color NavBack = Color.FromArgb(243, 243, 243);
         static readonly Color Accent = Color.FromArgb(43, 87, 154);
         static readonly Color Muted = Color.FromArgb(105, 105, 105);
@@ -52,7 +52,7 @@ namespace OfficeTabsLiteCenter
         readonly CheckBox[] _enable = new CheckBox[3];
         readonly CheckBox[] _reset = new CheckBox[3];
         readonly RadioButton _rounded = new RadioButton(), _trapezoid = new RadioButton(), _flat = new RadioButton();
-        readonly CheckBox _group = new CheckBox(), _icons = new CheckBox(), _doubleClick = new CheckBox(), _hideSingle = new CheckBox();
+        readonly CheckBox _group = new CheckBox(), _icons = new CheckBox(), _doubleClick = new CheckBox(), _hideSingle = new CheckBox(), _barBottom = new CheckBox();
         readonly TabStrip _preview = new TabStrip();
         readonly RadioButton _closeAsk = new RadioButton(), _closeFile = new RadioButton(), _closeAll = new RadioButton();
         readonly CheckBox _restore = new CheckBox(), _ctrlTab = new CheckBox(), _wheel = new CheckBox();
@@ -64,7 +64,7 @@ namespace OfficeTabsLiteCenter
             AutoScaleMode = AutoScaleMode.Dpi;
             Text = "Office Tabs Lite Center";
             Font = new Font("Segoe UI", 9.75f);
-            ClientSize = new Size(700, 470);
+            ClientSize = new Size(700, 500);
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
@@ -158,7 +158,8 @@ namespace OfficeTabsLiteCenter
             _icons.Text = "Show file icons on tabs";
             _doubleClick.Text = "Double-click empty space to open a new file";
             _hideSingle.Text = "Hide the tab bar when only one file is open";
-            CheckBox[] checks = { _group, _icons, _doubleClick, _hideSingle };
+            _barBottom.Text = "Show the tab bar below the document instead of above";
+            CheckBox[] checks = { _group, _icons, _doubleClick, _hideSingle, _barBottom };
             for (int i = 0; i < checks.Length; i++)
             {
                 checks[i].AutoSize = true;
@@ -166,7 +167,7 @@ namespace OfficeTabsLiteCenter
                 p.Controls.Add(checks[i]);
             }
             _icons.CheckedChanged += delegate { UpdatePreview(); };
-            AddNote(p, "Open Office windows pick up these changes within a few seconds.", 365);
+            AddNote(p, "Open Office windows pick up these changes within a few seconds.", 400);
             return p;
         }
 
@@ -262,6 +263,7 @@ namespace OfficeTabsLiteCenter
             _icons.Checked = s.ShowIcons;
             _doubleClick.Checked = s.NewOnDoubleClick;
             _hideSingle.Checked = s.HideSingleTab;
+            _barBottom.Checked = s.Position == BarPosition.Bottom;
             _closeAsk.Checked = s.WindowClose == CloseAction.Ask;
             _closeFile.Checked = s.WindowClose == CloseAction.CloseFile;
             _closeAll.Checked = s.WindowClose == CloseAction.CloseAll;
@@ -293,6 +295,7 @@ namespace OfficeTabsLiteCenter
                 s.ShowIcons = _icons.Checked;
                 s.NewOnDoubleClick = _doubleClick.Checked;
                 s.HideSingleTab = _hideSingle.Checked;
+                s.Position = _barBottom.Checked ? BarPosition.Bottom : BarPosition.Top;
                 s.WindowClose = _closeFile.Checked ? CloseAction.CloseFile
                               : _closeAll.Checked ? CloseAction.CloseAll : CloseAction.Ask;
                 s.RestoreSession = _restore.Checked;

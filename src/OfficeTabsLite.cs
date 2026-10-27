@@ -29,7 +29,7 @@ using Microsoft.Win32;
 
 [assembly: AssemblyTitle("OfficeTabsLite")]
 [assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("2.8.1.0")]
+[assembly: AssemblyFileVersion("2.9.0.0")]
 [assembly: ComVisible(false)]
 
 namespace OfficeTabsLite
@@ -128,11 +128,60 @@ namespace OfficeTabsLite
         public string Path;     // full file path, null while the file has never been saved
         public bool Modified;   // has unsaved changes
         public string Color;    // tab color name (see TabStrip.TabColors), null for none
+        public bool Pinned;     // closing commands skip it; it must be unpinned to close
 
         public bool SameAs(TabItem o)
         {
             return o != null && o.Key == Key && o.Caption == Caption && o.Ext == Ext &&
-                   o.Path == Path && o.Modified == Modified && o.Color == Color;
+                   o.Path == Path && o.Modified == Modified && o.Color == Color && o.Pinned == Pinned;
+        }
+    }
+
+    // Pinned tabs, by file path for a saved file or by window key otherwise (same shape as
+    // TabColorStore). A pinned tab ignores Close/Close Other/Close Tabs to the Right/Close All
+    // and its own X/middle-click; it must be unpinned (from the tab menu) before it can close.
+    internal static class PinStore
+    {
+        private const string KeyPath = TabsSettings.KeyPath + @"\PinnedTabs";
+        private static Dictionary<string, bool> _byPath;
+        private static readonly HashSet<string> ByWindow = new HashSet<string>();
+
+        public static bool Get(string windowKey, string path)
+        {
+            if (path != null && Saved().ContainsKey(path)) return true;
+            return ByWindow.Contains(windowKey);
+        }
+
+        public static void Set(string windowKey, string path, bool pinned)
+        {
+            if (pinned) ByWindow.Add(windowKey); else ByWindow.Remove(windowKey);
+            if (path == null) return;
+            if (pinned) Saved()[path] = true; else Saved().Remove(path);
+            try
+            {
+                using (RegistryKey k = Registry.CurrentUser.CreateSubKey(KeyPath))
+                    if (pinned) k.SetValue(path, 1, RegistryValueKind.DWord); else k.DeleteValue(path, false);
+            }
+            catch { }
+        }
+
+        public static void Forget(string windowKey)
+        {
+            ByWindow.Remove(windowKey);
+        }
+
+        private static Dictionary<string, bool> Saved()
+        {
+            if (_byPath != null) return _byPath;
+            _byPath = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                using (RegistryKey k = Registry.CurrentUser.OpenSubKey(KeyPath))
+                    if (k != null)
+                        foreach (string name in k.GetValueNames()) _byPath[name] = true;
+            }
+            catch { }
+            return _byPath;
         }
     }
 
@@ -241,6 +290,9 @@ namespace OfficeTabsLite
     // What the window's own close button (X, Alt+F4) does while several files are open.
     public enum CloseAction { Ask, CloseFile, CloseAll }
 
+    // Where the tab strip docks relative to the document.
+    public enum BarPosition { Top, Bottom }
+
     public class TabsSettings
     {
         public const string KeyPath = @"Software\OfficeTabsLite";
@@ -256,6 +308,7 @@ namespace OfficeTabsLite
         public bool RestoreSession = false;   // reopen last time's files when the app starts
         public bool CtrlTab = true;           // Ctrl+Tab / Ctrl+Shift+Tab switch tabs
         public bool WheelSwitch = true;       // mouse wheel over the strip switches tabs
+        public BarPosition Position = BarPosition.Top;
 
         public static TabsSettings Load()
         {
@@ -276,6 +329,8 @@ namespace OfficeTabsLite
                     s.RestoreSession = Convert.ToInt32(k.GetValue("RestoreSession", 0)) != 0;
                     s.CtrlTab = Convert.ToInt32(k.GetValue("CtrlTab", 1)) != 0;
                     s.WheelSwitch = Convert.ToInt32(k.GetValue("WheelSwitch", 1)) != 0;
+                    BarPosition pos;
+                    if (Enum.TryParse(Convert.ToString(k.GetValue("Position", "Top")), true, out pos)) s.Position = pos;
                 }
             }
             catch { }
@@ -295,6 +350,7 @@ namespace OfficeTabsLite
                 k.SetValue("RestoreSession", RestoreSession ? 1 : 0, RegistryValueKind.DWord);
                 k.SetValue("CtrlTab", CtrlTab ? 1 : 0, RegistryValueKind.DWord);
                 k.SetValue("WheelSwitch", WheelSwitch ? 1 : 0, RegistryValueKind.DWord);
+                k.SetValue("Position", Position.ToString());
             }
         }
 
@@ -303,7 +359,8 @@ namespace OfficeTabsLite
             return o != null && o.Style == Style && o.GroupTaskbar == GroupTaskbar &&
                    o.ShowIcons == ShowIcons && o.NewOnDoubleClick == NewOnDoubleClick &&
                    o.HideSingleTab == HideSingleTab && o.WindowClose == WindowClose &&
-                   o.RestoreSession == RestoreSession && o.CtrlTab == CtrlTab && o.WheelSwitch == WheelSwitch;
+                   o.RestoreSession == RestoreSession && o.CtrlTab == CtrlTab && o.WheelSwitch == WheelSwitch &&
+                   o.Position == Position;
         }
 
         // Whether Office loads the add-in at startup for this app; null if it isn't installed for it.
@@ -591,6 +648,7 @@ namespace OfficeTabsLite
         {
             object w = FindWindow(key);
             if (w == null) return;
+            if (PinStore.Get(key, PathOf(DocOf(w)))) return;   // pinned: must be unpinned first
             // Close through Office's own command so it asks about unsaved changes as usual.
             _closingTabs = true;
             try
@@ -627,6 +685,9 @@ namespace OfficeTabsLite
                 if (!latest.SameAs(_settings))
                 {
                     if (_settings.GroupTaskbar && !latest.GroupTaskbar) RestoreTaskbar();
+                    // The dock side is only read when a pane is first created; recreate every
+                    // pane so a Top/Bottom change takes effect on open windows too.
+                    if (_settings.Position != latest.Position) RemoveAllPanes();
                     _settings = latest;
                 }
             }
@@ -648,6 +709,7 @@ namespace OfficeTabsLite
                 t.Path = PathOf(doc);
                 t.Modified = IsModified(doc);
                 t.Color = TabColorStore.Get(key, t.Path);
+                t.Pinned = PinStore.Get(key, t.Path);
                 if (t.Path != null) _lastPath[key] = t.Path;
                 items.Add(t);
                 WatchClose(key);
@@ -663,7 +725,7 @@ namespace OfficeTabsLite
                 if (wins.ContainsKey(k)) { _missing.Remove(k); continue; }
                 int gone;
                 _missing.TryGetValue(k, out gone);
-                if (++gone > 5) { _order.Remove(k); _missing.Remove(k); TabColorStore.Forget(k); NoteClosed(k, items); }
+                if (++gone > 5) { _order.Remove(k); _missing.Remove(k); TabColorStore.Forget(k); PinStore.Forget(k); NoteClosed(k, items); }
                 else _missing[k] = gone;
             }
             List<TabItem> fresh = items.FindAll(t => !_order.Contains(t.Key));
@@ -756,6 +818,49 @@ namespace OfficeTabsLite
             Sync();
         }
 
+        // Saves the file under a new name in the same folder (same extension), deletes the old
+        // file once the new one exists, and carries its color/pin over to the new path.
+        internal void RenameFile(string key, string newBaseName)
+        {
+            object w = FindWindow(key);
+            if (w == null) return;
+            dynamic doc = DocOf(w);
+            string oldPath = PathOf(doc);
+            if (oldPath == null || string.IsNullOrEmpty(newBaseName)) return;
+            string dir = Path.GetDirectoryName(oldPath);
+            string ext = Path.GetExtension(oldPath);
+            string newPath = Path.Combine(dir, newBaseName + ext);
+            if (string.Equals(newPath, oldPath, StringComparison.OrdinalIgnoreCase)) return;
+            if (File.Exists(newPath))
+            {
+                MessageBox.Show("A file named \"" + newBaseName + ext + "\" already exists in that folder.",
+                                "Office Tabs Lite", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            try
+            {
+                SaveDocAs(doc, newPath);
+                try { if (File.Exists(oldPath)) File.Delete(oldPath); } catch { }
+                string color = TabColorStore.Get(key, oldPath);
+                if (color != null) { TabColorStore.Set(key, oldPath, null); TabColorStore.Set(key, newPath, color); }
+                if (PinStore.Get(key, oldPath)) { PinStore.Set(key, oldPath, false); PinStore.Set(key, newPath, true); }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Could not rename the file:\n\n" + ex.Message,
+                                "Office Tabs Lite", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            Sync();
+        }
+
+        // Word and PowerPoint have SaveAs2 (adds a compatibility-mode option); Excel only has
+        // the older SaveAs. Try the newer one first and fall back rather than branching on app.
+        private static void SaveDocAs(dynamic doc, string newPath)
+        {
+            try { doc.SaveAs2(newPath); return; } catch { }
+            doc.SaveAs(newPath);
+        }
+
         internal void SaveAll()
         {
             // Batch-resolved like Sync()'s loop: without this, two same-named PowerPoint
@@ -789,6 +894,12 @@ namespace OfficeTabsLite
             Sync();
         }
 
+        internal void SetTabPinned(string key, string path, bool pinned)
+        {
+            PinStore.Set(key, path, pinned);
+            Sync();
+        }
+
         // ---------- the window's close button ----------
         private void WatchClose(string key)
         {
@@ -802,13 +913,40 @@ namespace OfficeTabsLite
         internal bool OnWindowClose(IntPtr root, IWin32Window owner)
         {
             if (_closingTabs || _closeAllowed.Remove(root)) return false;
-            if (OpenKeys().Count <= 1) return false;
+            List<string> keys = OpenKeys();
+            string mine = keys.Find(k => RootOf(k) == root);
+            // Pinned, regardless of file count or the WindowClose setting: never close via the
+            // window's own X without an explicit "close it anyway" confirmation.
+            if (mine != null && IsPinned(mine))
+            {
+                Later(1, delegate { ConfirmCloseIfPinned(root, owner); });
+                return true;
+            }
+            if (keys.Count <= 1) return false;
             TabsSettings s = TabsSettings.Load();
             if (s.WindowClose == CloseAction.CloseFile) return false;
             // Word's own X button is still tracking the mouse here and would dismiss a dialog
             // at once, so decide after the click is over.
             Later(1, delegate { DecideClose(root, owner, s); });
             return true;
+        }
+
+        private bool IsPinned(string key)
+        {
+            string path;
+            _lastPath.TryGetValue(key, out path);
+            return PinStore.Get(key, path);
+        }
+
+        private void ConfirmCloseIfPinned(IntPtr root, IWin32Window owner)
+        {
+            if (!Native.IsWindow(root)) return;
+            DialogResult r = MessageBox.Show(owner,
+                "This tab is pinned.\nUnpin it from the tab menu, or click OK to close it anyway.",
+                "Office Tabs Lite", MessageBoxButtons.OKCancel, MessageBoxIcon.Information);
+            if (r != DialogResult.OK || !Native.IsWindow(root)) return;
+            _closeAllowed.Add(root);
+            Native.PostMessage(root, Native.WM_SYSCOMMAND, new IntPtr(Native.SC_CLOSE), IntPtr.Zero);
         }
 
         private void DecideClose(IntPtr root, IWin32Window owner, TabsSettings s)
@@ -1144,7 +1282,8 @@ namespace OfficeTabsLite
             try
             {
                 CustomTaskPane p = _factory.CreateCTP(StripProgId, "Tabs", window);
-                p.DockPosition = MsoCTPDockPosition.msoCTPDockPositionTop;
+                p.DockPosition = _settings.Position == BarPosition.Bottom
+                    ? MsoCTPDockPosition.msoCTPDockPositionBottom : MsoCTPDockPosition.msoCTPDockPositionTop;
                 p.DockPositionRestrict = MsoCTPDockPositionRestrict.msoCTPDockPositionRestrictNoChange;
                 p.Height = _fittedPaneHeight > 0 ? _fittedPaneHeight : 64;
                 p.Visible = true;
@@ -1468,6 +1607,58 @@ namespace OfficeTabsLite
             Controls.AddRange(new Control[] { icon, text, _dontAsk, note, bottom });
             AcceptButton = all;
             CancelButton = cancel;
+        }
+    }
+
+    // "Rename File..." - asks for a new name, keeping the original extension fixed.
+    internal sealed class RenameForm : Form
+    {
+        private readonly TextBox _name = new TextBox();
+        private readonly string _ext;
+
+        public string NewBaseName { get { return _name.Text.Trim(); } }
+
+        public RenameForm(string currentBaseName, string ext)
+        {
+            _ext = ext;
+            AutoScaleDimensions = new SizeF(96F, 96F);
+            AutoScaleMode = AutoScaleMode.Dpi;
+            Text = "Rename File";
+            Font = new Font("Segoe UI", 9.75f);
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false;
+            MinimizeBox = false;
+            ShowInTaskbar = false;
+            StartPosition = FormStartPosition.CenterParent;
+            BackColor = Color.White;
+            ClientSize = new Size(380, 140);
+
+            var label = new Label { Text = "New file name:", AutoSize = true, Location = new Point(20, 20) };
+            _name.Text = currentBaseName;
+            _name.Location = new Point(20, 44);
+            _name.Width = 260;
+            var extLabel = new Label { Text = ext, ForeColor = Color.FromArgb(105, 105, 105), AutoSize = true, Location = new Point(286, 47) };
+
+            var bottom = new Panel { Dock = DockStyle.Bottom, Height = 54, BackColor = Color.FromArgb(243, 243, 243) };
+            var ok = new Button { Text = "Rename", Size = new Size(100, 30), Location = new Point(166, 12), DialogResult = DialogResult.OK };
+            var cancel = new Button { Text = "Cancel", Size = new Size(90, 30), Location = new Point(274, 12), DialogResult = DialogResult.Cancel };
+            ok.Click += delegate { if (!ValidName()) DialogResult = DialogResult.None; };
+            bottom.Controls.AddRange(new Control[] { ok, cancel });
+
+            Controls.AddRange(new Control[] { label, _name, extLabel, bottom });
+            AcceptButton = ok;
+            CancelButton = cancel;
+        }
+
+        private bool ValidName()
+        {
+            string n = NewBaseName;
+            if (n.Length == 0 || n.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+            {
+                MessageBox.Show(this, "That's not a valid file name.", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
+            return true;
         }
     }
 
@@ -2026,6 +2217,7 @@ namespace OfficeTabsLite
 
             var menu = new ContextMenuStrip();
             AddItem(menu, "New", live, delegate { AnimateThenNew(host); });
+            AddItem(menu, item.Pinned ? "Unpin Tab" : "Pin Tab", live, delegate { TogglePin(item); });
             List<string> closed = live ? host.RecentlyClosed() : new List<string>();
             AddItem(menu, "Reopen Closed File", closed.Count > 0, delegate { host.ReopenClosed(); });
             var recent = new ToolStripMenuItem("Recently Closed");
@@ -2043,12 +2235,13 @@ namespace OfficeTabsLite
             AddItem(menu, "Save", live, delegate { host.SaveTab(key); });
             AddItem(menu, "Save All", live, delegate { host.SaveAll(); });
             menu.Items.Add(new ToolStripSeparator());
-            AddItem(menu, "Close", live, delegate { host.CloseTab(key); });
+            AddItem(menu, "Close", live && !item.Pinned, delegate { host.CloseTab(key); });
             AddItem(menu, "Close Other Tabs", live && others.Count > 0, delegate { host.CloseTabs(others); });
             AddItem(menu, "Close Tabs to the Right", live && right.Count > 0, delegate { host.CloseTabs(right); });
             AddItem(menu, "Close All", live, delegate { host.CloseTabs(all); });
             menu.Items.Add(new ToolStripSeparator());
             string path = item.Path;
+            AddItem(menu, "Rename File...", live && path != null, delegate { PromptRename(host, item); });
             AddItem(menu, "Copy Full Path", path != null, delegate { Clipboard.SetText(path); });
             AddItem(menu, "Open Containing Folder", path != null,
                     delegate { Process.Start("explorer.exe", "/select,\"" + path + "\""); });
@@ -2092,6 +2285,23 @@ namespace OfficeTabsLite
             Connect host = Connect.Current;
             if (_preview || host == null) { item.Color = color; Invalidate(); return; }
             host.SetTabColor(item.Key, item.Path, color);
+        }
+
+        private void TogglePin(TabItem item)
+        {
+            Connect host = Connect.Current;
+            if (_preview || host == null) { item.Pinned = !item.Pinned; Invalidate(); return; }
+            host.SetTabPinned(item.Key, item.Path, !item.Pinned);
+        }
+
+        private void PromptRename(Connect host, TabItem item)
+        {
+            if (host == null || item.Path == null) return;
+            using (var form = new RenameForm(Path.GetFileNameWithoutExtension(item.Path), Path.GetExtension(item.Path)))
+            {
+                if (form.ShowDialog(this) == DialogResult.OK)
+                    Defer(delegate { host.RenameFile(item.Key, form.NewBaseName); });
+            }
         }
 
         private void PaintTab(Graphics g, int i, bool active)
@@ -2156,6 +2366,19 @@ namespace OfficeTabsLite
                 active ? Color.FromArgb(30, 30, 30) : Color.FromArgb(70, 70, 70),
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter |
                 TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
+
+            // A pinned tab always shows a pin glyph in the close button's place - never the X,
+            // not even on hover - since it can't be closed that way until it's unpinned.
+            if (item.Pinned)
+            {
+                int cx = c.Left + c.Width / 2;
+                using (var pin = new SolidBrush(Color.FromArgb(70, 120, 200)))
+                {
+                    g.FillEllipse(pin, cx - 4, c.Top + 3, 8, 8);
+                    g.FillPolygon(pin, new[] { new Point(cx - 3, c.Top + 9), new Point(cx + 3, c.Top + 9), new Point(cx, c.Top + 14) });
+                }
+                return;
+            }
 
             // Unsaved changes show as a dot in the close button's place; hovering the tab
             // turns it back into the close button.
