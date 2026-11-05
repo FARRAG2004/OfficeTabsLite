@@ -526,6 +526,9 @@ namespace OfficeTabsLite
             StopWatching();
             RemoveAllPanes();
             RestoreTaskbar();
+            // Our own taskbar object; nothing uses it after this point (RestoreTaskbar ran first).
+            ReleaseCom(_taskbar);
+            _taskbar = null;
             _factory = null;
             _ribbon = null;
             _addInInst = null;
@@ -676,13 +679,15 @@ namespace OfficeTabsLite
 
         public void OnNew(object control)
         {
-            try { ((dynamic)_app).Documents.Add(); }
+            object added = null;
+            try { added = ((dynamic)_app).Documents.Add(); }
             catch {
-                try { ((dynamic)_app).Workbooks.Add(); }
+                try { added = ((dynamic)_app).Workbooks.Add(); }
                 catch {
-                    try { ((dynamic)_app).Presentations.Add(); } catch (Exception ex) { Log.Write("OnNew.PowerPoint", ex); }
+                    try { added = ((dynamic)_app).Presentations.Add(); } catch (Exception ex) { Log.Write("OnNew.PowerPoint", ex); }
                 }
             }
+            ReleaseCom(added);   // Office keeps the new file in its own collection
             Invalidate();
         }
 
@@ -1164,9 +1169,16 @@ namespace OfficeTabsLite
         private void OpenInApp(string path)
         {
             dynamic app = _app;
-            if (_appName == "Word") app.Documents.Open(path);
-            else if (_appName == "Excel") app.Workbooks.Open(path);
-            else app.Presentations.Open(path);
+            object opened = null;
+            try
+            {
+                if (_appName == "Word") opened = app.Documents.Open(path);
+                else if (_appName == "Excel") opened = app.Workbooks.Open(path);
+                else opened = app.Presentations.Open(path);
+            }
+            // Office keeps its own reference to the opened file (it is in Documents/Workbooks/
+            // Presentations); this one is not needed after the call.
+            finally { ReleaseCom(opened); }
         }
 
         // ---------- session (files open last time) ----------
@@ -1410,17 +1422,29 @@ namespace OfficeTabsLite
         }
 
         // ---------- helpers (all defensive; must never throw into Office) ----------
+        // Releases one COM reference that was taken for a single call and is not kept anywhere.
+        // Never call it for an object held in a field, list or dictionary: that would disconnect
+        // the wrapper the rest of the add-in still uses.
+        private static void ReleaseCom(object com)
+        {
+            if (com == null || !Marshal.IsComObject(com)) return;
+            try { Marshal.ReleaseComObject(com); } catch (Exception ex) { Log.Write("ReleaseCom", ex); }
+        }
+
         private List<object> GetWindows()
         {
             var list = new List<object>();
+            dynamic wins = null;
             try
             {
                 dynamic app = _app;
-                dynamic wins = app.Windows;
+                wins = app.Windows;
                 int n = (int)wins.Count;
                 for (int i = 1; i <= n; i++) list.Add(wins[i]);
             }
             catch (Exception ex) { Log.Write("GetWindows", ex); }
+            // Only the Windows collection is temporary here; the window objects go back to the caller.
+            finally { ReleaseCom((object)wins); }
             return list;
         }
 
