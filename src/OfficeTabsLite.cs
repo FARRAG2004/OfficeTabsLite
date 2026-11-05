@@ -582,10 +582,15 @@ namespace OfficeTabsLite
             EventHandler tick = null;
             tick = delegate
             {
+                // A Timer callback must never let an exception escape into the message loop.
                 t.Tick -= tick;
-                t.Stop();
-                t.Dispose();
-                try { action(); } catch (Exception ex) { Log.Write("Later", ex); }
+                try
+                {
+                    t.Stop();
+                    t.Dispose();
+                    action();
+                }
+                catch (Exception ex) { Log.Write("Later", ex); }
             };
             t.Tick += tick;
             t.Start();
@@ -1880,7 +1885,9 @@ namespace OfficeTabsLite
 
         private void OnTick(object sender, EventArgs e)
         {
-            try { Step(); } catch (Exception ex) { Log.Write("FreezeFrame.Tick", ex); Finish(); }
+            try { Step(); }
+            // Finish() below tears the timer down; if even that fails, nothing may reach the loop.
+            catch (Exception ex) { Log.Write("FreezeFrame.Tick", ex); try { Finish(); } catch { } }
         }
 
         private void Step()
@@ -2116,12 +2123,17 @@ namespace OfficeTabsLite
             EventHandler tick = null;
             tick = delegate
             {
+                // A Timer callback must never let an exception escape into the message loop, and
+                // the placeholder has to clear even when opening the new file fails.
                 wait.Tick -= tick;
-                wait.Stop();
-                wait.Dispose();
-                NoAnimUntil = DateTime.UtcNow.AddMilliseconds(1500);
-                _placeholder = null;
-                if (host != null) { try { host.NewDocument(); } catch (Exception ex) { Log.Write("TabStrip.NewDocument", ex); } }
+                try
+                {
+                    NoAnimUntil = DateTime.UtcNow.AddMilliseconds(1500);
+                    _placeholder = null;
+                    if (host != null) host.NewDocument();
+                }
+                catch (Exception ex) { Log.Write("TabStrip.NewDocument", ex); }
+                finally { wait.Stop(); wait.Dispose(); }
             };
             wait.Tick += tick;
             wait.Start();
