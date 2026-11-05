@@ -544,15 +544,7 @@ namespace OfficeTabsLite
             Later(1500, RestoreSession);
         }
 
-        public void OnBeginShutdown(ref Array custom)
-        {
-            // Office calls this before OnDisconnection: tear down already, so no pane, watcher
-            // or timer of ours outlives the shutdown.
-            StopTimer();
-            StopWatching();
-            RemoveAllPanes();
-            RestoreTaskbar();
-        }
+        public void OnBeginShutdown(ref Array custom) { StopTimer(); StopWatching(); }
 
         // ---------- ICustomTaskPaneConsumer ----------
         public void CTPFactoryAvailable(ICTPFactory CTPFactoryInst)
