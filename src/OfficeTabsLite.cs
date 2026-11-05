@@ -41,8 +41,7 @@ namespace OfficeTabsLite
     {
         private const long MaxBytes = 256 * 1024;
         private static readonly object Gate = new object();
-        private static DateTime _lastWrite;
-        private static string _lastKey;
+        private static readonly Dictionary<string, DateTime> _recent = new Dictionary<string, DateTime>();
 
         public static void Write(string where, Exception e)
         {
@@ -50,14 +49,16 @@ namespace OfficeTabsLite
             {
                 if (e == null) return;
                 // The sync tick runs 5 times a second: a failure that repeats there must not
-                // fill the file, so the same message is written at most once a minute.
+                // fill the file, so each distinct message is written at most once a minute.
                 string key = where + "|" + e.GetType().Name + "|" + e.Message;
                 lock (Gate)
                 {
                     DateTime now = DateTime.UtcNow;
-                    if (key == _lastKey && (now - _lastWrite).TotalSeconds < 60) return;
-                    _lastKey = key;
-                    _lastWrite = now;
+                    DateTime seen;
+                    if (_recent.TryGetValue(key, out seen) && (now - seen).TotalSeconds < 60) return;
+                    // Guard against a long session with ever-changing messages.
+                    if (_recent.Count >= 200) _recent.Clear();
+                    _recent[key] = now;
                     string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                                               "OfficeTabsLite");
                     Directory.CreateDirectory(dir);
