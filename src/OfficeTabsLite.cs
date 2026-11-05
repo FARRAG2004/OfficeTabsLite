@@ -34,6 +34,43 @@ using Microsoft.Win32;
 
 namespace OfficeTabsLite
 {
+    // Every Office/WinForms callback is wrapped so it cannot throw into Office; what it
+    // swallowed goes here instead. %LOCALAPPDATA%\OfficeTabsLite\log.txt, capped at 256 KB,
+    // the same error at most once a minute, and never throws itself.
+    internal static class Log
+    {
+        private const long MaxBytes = 256 * 1024;
+        private static readonly object Gate = new object();
+        private static DateTime _lastWrite;
+        private static string _lastKey;
+
+        public static void Write(string where, Exception e)
+        {
+            try
+            {
+                if (e == null) return;
+                // The sync tick runs 5 times a second: a failure that repeats there must not
+                // fill the file, so the same message is written at most once a minute.
+                string key = where + "|" + e.GetType().Name + "|" + e.Message;
+                lock (Gate)
+                {
+                    DateTime now = DateTime.UtcNow;
+                    if (key == _lastKey && (now - _lastWrite).TotalSeconds < 60) return;
+                    _lastKey = key;
+                    _lastWrite = now;
+                    string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                                              "OfficeTabsLite");
+                    Directory.CreateDirectory(dir);
+                    string file = Path.Combine(dir, "log.txt");
+                    try { if (File.Exists(file) && new FileInfo(file).Length > MaxBytes) File.Delete(file); } catch { }
+                    File.AppendAllText(file, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "  " + where + "  " +
+                                             e.GetType().Name + ": " + e.Message + Environment.NewLine);
+                }
+            }
+            catch { }
+        }
+    }
+
     internal static class Native
     {
         public const uint GA_ROOT = 2;
@@ -474,7 +511,7 @@ namespace OfficeTabsLite
             Current = this;
 
             string name = "";
-            try { name = (string)((dynamic)Application).Name; } catch { }
+            try { name = (string)((dynamic)Application).Name; } catch (Exception ex) { Log.Write("OnConnection.Name", ex); }
             if (name.IndexOf("Excel", StringComparison.OrdinalIgnoreCase) >= 0) { _defaultExt = ".xlsx"; _appName = "Excel"; }
             else if (name.IndexOf("PowerPoint", StringComparison.OrdinalIgnoreCase) >= 0) { _defaultExt = ".pptx"; _appName = "PowerPoint"; }
             _accent = TabStrip.AccentFor(_defaultExt);
@@ -513,7 +550,7 @@ namespace OfficeTabsLite
             {
                 _timer = new Timer();
                 _timer.Interval = 200;
-                _timer.Tick += delegate { try { Sync(); } catch { } };
+                _timer.Tick += delegate { try { Sync(); } catch (Exception ex) { Log.Write("Timer.Tick", ex); } };
                 _timer.Start();
             }
             if (_keyHook == null) _keyHook = KeyHook.Install(this);
@@ -531,7 +568,7 @@ namespace OfficeTabsLite
         {
             var t = new Timer();
             t.Interval = Math.Max(1, ms);
-            t.Tick += delegate { t.Stop(); t.Dispose(); try { action(); } catch { } };
+            t.Tick += delegate { t.Stop(); t.Dispose(); try { action(); } catch (Exception ex) { Log.Write("Later", ex); } };
             t.Start();
         }
 
@@ -591,7 +628,7 @@ namespace OfficeTabsLite
                 string dir = Path.GetDirectoryName(typeof(Connect).Assembly.Location);
                 Process.Start(Path.Combine(dir, "OfficeTabsLite-Center.exe"));
             }
-            catch { }
+            catch (Exception ex) { Log.Write("OnSettings", ex); }
         }
 
         public int GetDocCount(object control)
@@ -627,7 +664,7 @@ namespace OfficeTabsLite
             catch {
                 try { ((dynamic)_app).Workbooks.Add(); }
                 catch {
-                    try { ((dynamic)_app).Presentations.Add(); } catch { }
+                    try { ((dynamic)_app).Presentations.Add(); } catch (Exception ex) { Log.Write("OnNew.PowerPoint", ex); }
                 }
             }
             Invalidate();
@@ -640,7 +677,7 @@ namespace OfficeTabsLite
             if (w == null) return;
             if (_barVisible && _activeKey != null && _activeKey != key)
                 CopyPlacement(RootOf(_activeKey), RootOf(key));
-            try { ((dynamic)w).Activate(); } catch { }
+            try { ((dynamic)w).Activate(); } catch (Exception ex) { Log.Write("ActivateTab", ex); }
             Sync();
         }
 
@@ -660,7 +697,7 @@ namespace OfficeTabsLite
                 // bulk close of mostly-saved files close in one smooth step instead.
                 if (!IsModified(doc) && CloseClean(doc)) { Sync(); return; }
             }
-            catch { }
+            catch (Exception ex) { Log.Write("CloseTab", ex); }
             finally { _closingTabs = false; }
             // Has unsaved changes (or the direct close above didn't apply): go through
             // Office's own command so it asks about saving as usual.
@@ -670,7 +707,7 @@ namespace OfficeTabsLite
                 ((dynamic)w).Activate();
                 ((dynamic)_app).CommandBars.ExecuteMso("FileClose");
             }
-            catch { }
+            catch (Exception ex) { Log.Write("CloseTab.FileClose", ex); }
             finally { _closingTabs = false; }
             Sync();
         }
@@ -789,7 +826,7 @@ namespace OfficeTabsLite
                 strip.Configure(_settings, _accent);
                 strip.SetTabs(items, kv.Key);
                 bool show = !(_settings.HideSingleTab && wins.Count == 1);
-                try { if (pane.Visible != show) pane.Visible = show; } catch { }
+                try { if (pane.Visible != show) pane.Visible = show; } catch (Exception ex) { Log.Write("Sync.PaneVisible", ex); }
             }
         }
 
@@ -838,12 +875,12 @@ namespace OfficeTabsLite
             dynamic doc = DocOf(w);
             if (PathOf(doc) != null)
             {
-                try { doc.Save(); } catch { }
+                try { doc.Save(); } catch (Exception ex) { Log.Write("SaveTab.Save", ex); }
             }
             else
             {
                 // Never saved: let Office show its own Save As.
-                try { ((dynamic)w).Activate(); ((dynamic)_app).CommandBars.ExecuteMso("FileSave"); } catch { }
+                try { ((dynamic)w).Activate(); ((dynamic)_app).CommandBars.ExecuteMso("FileSave"); } catch (Exception ex) { Log.Write("SaveTab.FileSave", ex); }
             }
             Sync();
         }
@@ -870,7 +907,7 @@ namespace OfficeTabsLite
             try
             {
                 SaveDocAs(doc, newPath);
-                try { if (File.Exists(oldPath)) File.Delete(oldPath); } catch { }
+                try { if (File.Exists(oldPath)) File.Delete(oldPath); } catch (Exception ex) { Log.Write("RenameFile.DeleteOld", ex); }
                 string color = TabColorStore.Get(key, oldPath);
                 if (color != null) { TabColorStore.Set(key, oldPath, null); TabColorStore.Set(key, newPath, color); }
                 if (PinStore.Get(key, oldPath)) { PinStore.Set(key, oldPath, false); PinStore.Set(key, newPath, true); }
@@ -1104,7 +1141,7 @@ namespace OfficeTabsLite
                                 MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
-            try { OpenInApp(path); } catch { }
+            try { OpenInApp(path); } catch (Exception ex) { Log.Write("OpenFile", ex); }
             Sync();
         }
 
@@ -1143,10 +1180,10 @@ namespace OfficeTabsLite
                 foreach (string path in FileLists.Get("Session." + _appName))
                 {
                     if (open.Contains(path) || !File.Exists(path)) continue;
-                    try { OpenInApp(path); open.Add(path); } catch { }
+                    try { OpenInApp(path); open.Add(path); } catch (Exception ex) { Log.Write("RestoreSession.Open", ex); }
                 }
             }
-            catch { }
+            catch (Exception ex) { Log.Write("RestoreSession", ex); }
             finally { _sessionReady = true; }
         }
 
@@ -1278,14 +1315,14 @@ namespace OfficeTabsLite
                     if (_taskbarHidden.Add(root)) _taskbar.DeleteTab(root);
                 }
             }
-            catch { }
+            catch (Exception ex) { Log.Write("SetTaskbarButton", ex); }
         }
 
         private void RestoreTaskbar()
         {
             if (_taskbar != null)
                 foreach (IntPtr root in _taskbarHidden)
-                    if (Native.IsWindow(root)) { try { _taskbar.AddTab(root); } catch { } }
+                    if (Native.IsWindow(root)) { try { _taskbar.AddTab(root); } catch (Exception ex) { Log.Write("RestoreTaskbar.AddTab", ex); } }
             _taskbarHidden.Clear();
             _activeKey = null;
         }
@@ -1307,7 +1344,7 @@ namespace OfficeTabsLite
                 try { if (_fittedPaneHeight == 0) _fittedPaneHeight = pane.Height; } catch { }
                 return;
             }
-            try { pane.Height = Math.Max(20, pane.Height + diff); } catch { }
+            try { pane.Height = Math.Max(20, pane.Height + diff); } catch (Exception ex) { Log.Write("FitHeight", ex); }
         }
 
         private CustomTaskPane CreatePane(object window)
@@ -1322,7 +1359,7 @@ namespace OfficeTabsLite
                 p.Visible = true;
                 return p;
             }
-            catch { return null; }
+            catch (Exception ex) { Log.Write("CreatePane", ex); return null; }
         }
 
         private static TabStrip StripOf(CustomTaskPane pane)
@@ -1362,7 +1399,7 @@ namespace OfficeTabsLite
                 int n = (int)wins.Count;
                 for (int i = 1; i <= n; i++) list.Add(wins[i]);
             }
-            catch { }
+            catch (Exception ex) { Log.Write("GetWindows", ex); }
             return list;
         }
 
@@ -1468,7 +1505,7 @@ namespace OfficeTabsLite
                 for (int i = 0; i < wins.Count; i++)
                     if (CaptionOf(wins[i]) == active) return i;
             }
-            catch { }
+            catch (Exception ex) { Log.Write("ActiveIndex", ex); }
             return 0;
         }
 
@@ -1480,7 +1517,7 @@ namespace OfficeTabsLite
                 if (index >= 0 && index < wins.Count)
                     ((dynamic)wins[index]).Activate();
             }
-            catch { }
+            catch (Exception ex) { Log.Write("ActivateAt", ex); }
         }
 
         private void Step(int delta)
@@ -1496,7 +1533,7 @@ namespace OfficeTabsLite
 
         private void Invalidate()
         {
-            try { if (_ribbon != null) _ribbon.Invalidate(); } catch { }
+            try { if (_ribbon != null) _ribbon.Invalidate(); } catch (Exception ex) { Log.Write("Invalidate", ex); }
         }
     }
 
@@ -1512,7 +1549,7 @@ namespace OfficeTabsLite
         public CloseWatcher(Connect host, IntPtr root)
         {
             _host = host;
-            try { AssignHandle(root); } catch { }
+            try { AssignHandle(root); } catch (Exception ex) { Log.Write("CloseWatcher.AssignHandle", ex); }
         }
 
         public void Release()
@@ -1539,7 +1576,7 @@ namespace OfficeTabsLite
             if (_host != null && (sysClose || xClose))
             {
                 bool taken = false;
-                try { taken = _host.OnWindowClose(Handle, this); } catch { }
+                try { taken = _host.OnWindowClose(Handle, this); } catch (Exception ex) { Log.Write("CloseWatcher.WndProc", ex); }
                 if (taken) return;
                 if (sysClose)
                 {
@@ -1582,7 +1619,7 @@ namespace OfficeTabsLite
                     _host.OnCtrlTab(Native.GetKeyState(Native.VK_SHIFT) < 0))
                     return new IntPtr(1);
             }
-            catch { }
+            catch (Exception ex) { Log.Write("KeyHook.Proc", ex); }
             return Native.CallNextHookEx(_hook, code, wParam, lParam);
         }
 
@@ -1747,7 +1784,7 @@ namespace OfficeTabsLite
                 f.Open(bounds, hbitmap);
                 return f;
             }
-            catch { return null; }
+            catch (Exception ex) { Log.Write("FreezeFrame.Cover", ex); return null; }
         }
 
         private void Open(Rectangle bounds, IntPtr hbitmap)
@@ -1792,7 +1829,7 @@ namespace OfficeTabsLite
         {
             _timer = new Timer();
             _timer.Interval = 15;
-            _timer.Tick += delegate { try { Step(); } catch { Finish(); } };
+            _timer.Tick += delegate { try { Step(); } catch (Exception ex) { Log.Write("FreezeFrame.Tick", ex); Finish(); } };
             _timer.Start();
         }
 
@@ -1896,7 +1933,7 @@ namespace OfficeTabsLite
                     if (!AnyGrowing()) _animTimer.Stop();
                     Relayout();
                 }
-                catch { _animTimer.Stop(); }
+                catch (Exception ex) { Log.Write("TabStrip.AnimTick", ex); _animTimer.Stop(); }
             };
         }
 
@@ -2016,7 +2053,7 @@ namespace OfficeTabsLite
                 wait.Dispose();
                 NoAnimUntil = DateTime.UtcNow.AddMilliseconds(1500);
                 _placeholder = null;
-                if (host != null) { try { host.NewDocument(); } catch { } }
+                if (host != null) { try { host.NewDocument(); } catch (Exception ex) { Log.Write("TabStrip.NewDocument", ex); } }
             };
             wait.Start();
         }
@@ -2044,7 +2081,7 @@ namespace OfficeTabsLite
         private void Relayout()
         {
             _hoverTab = -1; _hoverClose = false; _tipTab = -1;
-            try { using (Graphics g = CreateGraphics()) LayoutTabs(g); } catch { }
+            try { using (Graphics g = CreateGraphics()) LayoutTabs(g); } catch (Exception ex) { Log.Write("Relayout", ex); }
             Invalidate();
         }
 
@@ -2161,7 +2198,7 @@ namespace OfficeTabsLite
                     Native.DestroyIcon(info.hIcon);
                 }
             }
-            catch { }
+            catch (Exception ex) { Log.Write("IconFor", ex); }
             IconCache[ext] = bmp;
             return bmp;
         }
@@ -2171,7 +2208,7 @@ namespace OfficeTabsLite
         // would surface inside Office as a .NET error dialog.
         protected override void OnPaint(PaintEventArgs e)
         {
-            try { PaintStrip(e.Graphics); } catch { }
+            try { PaintStrip(e.Graphics); } catch (Exception ex) { Log.Write("TabStrip.Paint", ex); }
         }
 
         private void PaintStrip(Graphics g)
@@ -2479,7 +2516,7 @@ namespace OfficeTabsLite
         protected override void OnMouseMove(MouseEventArgs e)
         {
             base.OnMouseMove(e);
-            try { MouseMoved(e); } catch { }
+            try { MouseMoved(e); } catch (Exception ex) { Log.Write("TabStrip.MouseMove", ex); }
         }
 
         protected override void OnMouseDown(MouseEventArgs e)
@@ -2494,7 +2531,7 @@ namespace OfficeTabsLite
                 _dragging = false;
                 _dropIndex = -1;
             }
-            catch { _dragKey = null; }
+            catch (Exception ex) { _dragKey = null; Log.Write("TabStrip.MouseDown", ex); }
         }
 
         // Where a dragged tab would land: the slot before the first tab whose middle is
@@ -2546,7 +2583,7 @@ namespace OfficeTabsLite
         protected override void OnMouseUp(MouseEventArgs e)
         {
             base.OnMouseUp(e);
-            try { MouseReleased(e); } catch { }
+            try { MouseReleased(e); } catch (Exception ex) { Log.Write("TabStrip.MouseUp", ex); }
         }
 
         private void MouseReleased(MouseEventArgs e)
@@ -2608,7 +2645,7 @@ namespace OfficeTabsLite
                 int delta = e.Delta > 0 ? -1 : +1;
                 Defer(delegate { host.StepTab(delta); });
             }
-            catch { }
+            catch (Exception ex) { Log.Write("TabStrip.MouseWheel", ex); }
         }
 
         protected override void OnMouseDoubleClick(MouseEventArgs e)
@@ -2621,13 +2658,13 @@ namespace OfficeTabsLite
                     HitTab(e.Location) < 0 && !_plusRect.Contains(e.Location))
                     AnimateThenNew(host);
             }
-            catch { }
+            catch (Exception ex) { Log.Write("TabStrip.MouseDoubleClick", ex); }
         }
 
         // Run after the current click finishes: closing a document can destroy this very pane.
         private void Defer(MethodInvoker action)
         {
-            try { BeginInvoke(new MethodInvoker(delegate { try { action(); } catch { } })); } catch { }
+            try { BeginInvoke(new MethodInvoker(delegate { try { action(); } catch (Exception ex) { Log.Write("Defer", ex); } })); } catch (Exception ex) { Log.Write("Defer.BeginInvoke", ex); }
         }
     }
 }
