@@ -540,7 +540,15 @@ namespace OfficeTabsLite
             Later(1500, RestoreSession);
         }
 
-        public void OnBeginShutdown(ref Array custom) { StopTimer(); StopWatching(); }
+        public void OnBeginShutdown(ref Array custom)
+        {
+            // Office calls this before OnDisconnection: tear down already, so no pane, watcher
+            // or timer of ours outlives the shutdown.
+            StopTimer();
+            StopWatching();
+            RemoveAllPanes();
+            RestoreTaskbar();
+        }
 
         // ---------- ICustomTaskPaneConsumer ----------
         public void CTPFactoryAvailable(ICTPFactory CTPFactoryInst)
@@ -550,7 +558,7 @@ namespace OfficeTabsLite
             {
                 _timer = new Timer();
                 _timer.Interval = 200;
-                _timer.Tick += delegate { try { Sync(); } catch (Exception ex) { Log.Write("Timer.Tick", ex); } };
+                _timer.Tick += OnSyncTick;
                 _timer.Start();
             }
             if (_keyHook == null) _keyHook = KeyHook.Install(this);
@@ -568,7 +576,15 @@ namespace OfficeTabsLite
         {
             var t = new Timer();
             t.Interval = Math.Max(1, ms);
-            t.Tick += delegate { t.Stop(); t.Dispose(); try { action(); } catch (Exception ex) { Log.Write("Later", ex); } };
+            EventHandler tick = null;
+            tick = delegate
+            {
+                t.Tick -= tick;
+                t.Stop();
+                t.Dispose();
+                try { action(); } catch (Exception ex) { Log.Write("Later", ex); }
+            };
+            t.Tick += tick;
             t.Start();
         }
 
@@ -1383,9 +1399,14 @@ namespace OfficeTabsLite
             _failed.Clear();
         }
 
+        private void OnSyncTick(object sender, EventArgs e)
+        {
+            try { Sync(); } catch (Exception ex) { Log.Write("Timer.Tick", ex); }
+        }
+
         private void StopTimer()
         {
-            if (_timer != null) { _timer.Stop(); _timer.Dispose(); _timer = null; }
+            if (_timer != null) { _timer.Tick -= OnSyncTick; _timer.Stop(); _timer.Dispose(); _timer = null; }
         }
 
         // ---------- helpers (all defensive; must never throw into Office) ----------
@@ -1829,8 +1850,13 @@ namespace OfficeTabsLite
         {
             _timer = new Timer();
             _timer.Interval = 15;
-            _timer.Tick += delegate { try { Step(); } catch (Exception ex) { Log.Write("FreezeFrame.Tick", ex); Finish(); } };
+            _timer.Tick += OnTick;
             _timer.Start();
+        }
+
+        private void OnTick(object sender, EventArgs e)
+        {
+            try { Step(); } catch (Exception ex) { Log.Write("FreezeFrame.Tick", ex); Finish(); }
         }
 
         private void Step()
@@ -1850,7 +1876,7 @@ namespace OfficeTabsLite
 
         private void Finish()
         {
-            if (_timer != null) { _timer.Stop(); _timer.Dispose(); _timer = null; }
+            if (_timer != null) { _timer.Tick -= OnTick; _timer.Stop(); _timer.Dispose(); _timer = null; }
             try { DestroyHandle(); } catch { }
             if (_bitmap != IntPtr.Zero) { DeleteObject(_bitmap); _bitmap = IntPtr.Zero; }
         }
@@ -1926,15 +1952,31 @@ namespace OfficeTabsLite
                      ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
             BackColor = StripBottom;
             _animTimer.Interval = 15;
-            _animTimer.Tick += delegate
+            _animTimer.Tick += OnAnimTick;
+        }
+
+        private void OnAnimTick(object sender, EventArgs e)
+        {
+            try
             {
-                try
-                {
-                    if (!AnyGrowing()) _animTimer.Stop();
-                    Relayout();
-                }
-                catch (Exception ex) { Log.Write("TabStrip.AnimTick", ex); _animTimer.Stop(); }
-            };
+                if (!AnyGrowing()) _animTimer.Stop();
+                Relayout();
+            }
+            catch (Exception ex) { Log.Write("TabStrip.AnimTick", ex); _animTimer.Stop(); }
+        }
+
+        // The strip lives inside an Office pane: once the pane is gone the control must let go
+        // of its own timer and tooltip, or they keep the control and its window alive.
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _animTimer.Tick -= OnAnimTick;
+                _animTimer.Stop();
+                _animTimer.Dispose();
+                _tip.Dispose();
+            }
+            base.Dispose(disposing);
         }
 
         // 0..1 with an ease-out curve: fast at first, settling gently at full width.
@@ -2047,14 +2089,17 @@ namespace OfficeTabsLite
 
             var wait = new Timer();
             wait.Interval = (int)GrowMs;
-            wait.Tick += delegate
+            EventHandler tick = null;
+            tick = delegate
             {
+                wait.Tick -= tick;
                 wait.Stop();
                 wait.Dispose();
                 NoAnimUntil = DateTime.UtcNow.AddMilliseconds(1500);
                 _placeholder = null;
                 if (host != null) { try { host.NewDocument(); } catch (Exception ex) { Log.Write("TabStrip.NewDocument", ex); } }
             };
+            wait.Tick += tick;
             wait.Start();
         }
 
